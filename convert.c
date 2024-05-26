@@ -59,11 +59,13 @@ static void
 readJsonNumberArray(json_t *jArray, int *output) {
     json_t *values = json_values(jArray);
 
+    int isArray = 1;
     for(size_t i = 0; i < jArray->len; i++) {
         json_t *value = values + i;
-        assert(value->type == JSON_NUMBER);
+        isArray &= value->type == JSON_NUMBER;
         output[i] = value->number;
     }
+    assert(isArray);
 }
 
 static SampleNode
@@ -413,6 +415,7 @@ convertFile(Arena *arena, char *path) {
 
     printf("Converted %s to %s\n", path, outputPath);
 }
+
 
 int main(int argCount, char **args) {
     Arena arena = arenaCreate(64 * MEGABYTE, 4096, 32);
