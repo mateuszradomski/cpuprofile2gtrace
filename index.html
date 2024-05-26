@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+  <body style="position: static; margin: 0px; height: 100vh">
+    <script src="a.out.js"></script>
+    <script>
+      // Wait for the module to be fully loaded
+      Module.onRuntimeInitialized = function () {
+        document.getElementById("drop_zone").ondragover = function (event) {
+          event.preventDefault();
+          return false;
+        };
+        document.getElementById("drop_zone").ondrop = async function (event) {
+          event.preventDefault();
+          [...event.dataTransfer.items].forEach(async (item) => {
+            if (item.kind === "file") {
+              const file = item.getAsFile();
+              if (file && file.name.endsWith(".cpuprofile")) {
+                const outputName = file.name.replace(
+                  ".cpuprofile",
+                  "_spall.json",
+                );
+                const input = await file.text();
+
+                const jsArray = new TextEncoder().encode(input);
+
+                const cArrayPointer = Module._malloc(jsArray.length);
+                let memoryBuffer = Module.HEAPU8.buffer;
+                const cArray = new Uint8Array(
+                  memoryBuffer,
+                  cArrayPointer,
+                  jsArray.length,
+                );
+                cArray.set(jsArray);
+
+                const resultPointer = Module._convertStringToPerfetto(
+                  cArrayPointer,
+                  jsArray.length,
+                );
+                memoryBuffer = Module.HEAPU8.buffer;
+                const memory = new Uint32Array(memoryBuffer);
+                const dataPointer = memory[resultPointer / 4];
+                const dataLength = memory[resultPointer / 4 + 1];
+                const data = new Uint8Array(
+                  memoryBuffer,
+                  dataPointer,
+                  dataLength,
+                );
+                const string = new TextDecoder().decode(data);
+                console.log(string);
+
+                const blob = new Blob([string], { type: "application/json" });
+                const downloadLink = document.createElement("a");
+                downloadLink.href = URL.createObjectURL(blob);
+                downloadLink.download = outputName;
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+              }
+            }
+          });
+          return false;
+        };
+      };
+    </script>
+    <div
+      style="
+        position: relative;
+        width: 100vw;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      "
+      id="drop_zone"
+    >
+      <p style="font-size: 3rem; font-weight: 600; font-family: monospace">
+        Drag & Drop your .cpuprofile file here
+      </p>
+    </div>
+  </body>
+</html>

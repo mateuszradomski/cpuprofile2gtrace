@@ -228,6 +228,24 @@ closeFile(FileHandle handle) {
     close(handle);
 }
 
+#else
+typedef int FileHandle;
+typedef struct stat64_t {
+    u64 st_size;
+} stat64_t;
+
+static stat64_t
+fileStat(const char *path) { return (stat64_t){ 0 }; }
+
+static FileHandle
+openFile(const char *filepath) { return 0; }
+
+static void
+readFile(FileHandle handle, u8 *out, u64 length) {}
+
+static void
+closeFile(FileHandle handle) {}
+
 #endif
 
 static u64
@@ -292,7 +310,7 @@ cursorCommitChunk(MemoryCursor *cursor, u8 *pointer, u64 size) {
         size = MIN(MAX(256 * MEGABYTE, size), trailingSize);
 #if _WIN32
         VirtualAlloc(pointer, size, MEM_COMMIT, PAGE_READWRITE);
-#else
+#elif __APPLE__ || __linux__
         u64 pageSize = 16 * KILOBYTE;
         void *alignedPointer = (void *)((size_t)pointer & ~(pageSize - 1));
         size_t additionalSize = (size_t)pointer - (size_t)alignedPointer;
@@ -313,9 +331,11 @@ arenaAddNode(Arena *arena, size_t size) {
 #ifdef _WIN32
     void *memory = (u8 *)VirtualAlloc(NULL, allocSize, MEM_RESERVE, PAGE_READWRITE);
     VirtualAlloc(memory, sizeof(MemoryCursorNode), MEM_COMMIT, PAGE_READWRITE);
-#else
+#elif __APPLE__ || __linux__
     void *memory = mmap(0, allocSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     mprotect(memory, sizeof(MemoryCursorNode), PROT_READ | PROT_WRITE);
+#else
+    void *memory = malloc(allocSize);
 #endif
 
     assert(memory);
@@ -344,8 +364,10 @@ cursorDestroy(MemoryCursor *cursor) {
 
 #ifdef _WIN32
         VirtualFree(pointer, 0, MEM_RELEASE);
-#else
+#elif __APPLE__ || __linux__
         munmap(pointer, cursor->size + sizeof(MemoryCursorNode));
+#else
+        free(pointer);
 #endif
     }
 }
@@ -526,7 +548,7 @@ arenaClear(Arena *arena) {
 typedef struct String
 {
     u8 *data;
-    u64 size;     
+    size_t size;     
 } String;
 
 typedef struct SplitIterator

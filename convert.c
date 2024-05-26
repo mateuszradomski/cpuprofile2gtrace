@@ -383,6 +383,19 @@ convertToPerfetto(Arena *arena, String input) {
     return writeOutput(arena, &stack, cpuprofile);
 }
 
+#ifdef EMSCRIPTEN
+String result = { 0 };
+
+String *convertStringToPerfetto(const char *string, int len) {
+    Arena arena = arenaCreate(64 * MEGABYTE, 4096, 32);
+    String input = { (u8 *)string, len };
+    result = convertToPerfetto(&arena, input);
+    arenaDestroy(&arena);
+    return &result;
+}
+#endif
+
+#ifndef EMSCRIPTEN
 static void
 convertFile(Arena *arena, char *path) {
     String input = readFileIntoString(arena, path);
@@ -416,3 +429,4 @@ int main(int argCount, char **args) {
 
     return 0;
 }
+#endif
