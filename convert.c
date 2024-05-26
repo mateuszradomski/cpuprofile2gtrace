@@ -55,24 +55,6 @@ typedef struct EvalStack {
     EmitedEvalStackList emitted;
 } EvalStack;
 
-static char *
-readEntireFile(char *filepath) {
-
-    FILE *f = fopen(filepath, "r");
-    if(!f) {
-        fprintf(stderr, "Failed to open file [%s]\n", filepath);
-        return NULL;
-    }
-
-    struct stat fStat;
-    stat(filepath, &fStat);
-    char *output = malloc(fStat.st_size);
-    fread(output, fStat.st_size, 1, f);
-    fclose(f);
-
-    return output;
-}
-
 static void
 readJsonNumberArray(json_t *jArray, int *output) {
     json_t *values = json_values(jArray);
@@ -85,7 +67,7 @@ readJsonNumberArray(json_t *jArray, int *output) {
 }
 
 static SampleNode
-parseSampleNode(json_t *node) {
+parseSampleNode(Arena *arena, json_t *node) {
     SampleNode result = { 0 };
 
     json_t *values = json_values(node);
@@ -101,7 +83,7 @@ parseSampleNode(json_t *node) {
             assert(value->type == JSON_ARRAY);
             result.childCount = value->len;
             if(result.childCount > 0) {
-                result.childs = malloc(sizeof(int) * result.childCount);
+                result.childs = arrayPush(arena, int, result.childCount);
                 readJsonNumberArray(value, result.childs);
             }
         } else if(strcmp(name, "callFrame") == 0) {
@@ -133,13 +115,13 @@ parseSampleNode(json_t *node) {
 }
 
 static void
-parseSampleNodes(json_t *jArray, SampleNode *output) {
+parseSampleNodes(Arena *arena, json_t *jArray, SampleNode *output) {
     json_t *values = json_values(jArray);
 
     for(size_t i = 0; i < jArray->len; i++) {
         json_t *value = values + i;
         assert(value->type == JSON_OBJECT);
-        SampleNode out = parseSampleNode(value);
+        SampleNode out = parseSampleNode(arena, value);
         output[out.id - 1] = out;
     }
 }
@@ -222,7 +204,7 @@ typedef struct CPUProfile {
 } CPUProfile;
 
 static CPUProfile
-parseCPUProfileJSON(char *jsonContent, int length) {
+parseCPUProfileJSON(Arena *arena, String jsonString) {
     CPUProfile cpuprofile = { 
         .startTime = -1.0f, .sampleCount = 0,
         .samples = NULL, .deltaCount = 0,
@@ -231,17 +213,13 @@ parseCPUProfileJSON(char *jsonContent, int length) {
     };
 
     json_t *json = 0x0;
-    {
-        unsigned int tokens_capacity = 1 + length / 2;
-        json_token_t *tokens = malloc(tokens_capacity * sizeof(json_token_t));
-        unsigned int size_req;
-        int tokens_len = json_tokenize(jsonContent, length, tokens, tokens_capacity, &size_req);
-        if (tokens_len > 0) {
-            json = malloc(size_req);
-            json_parse_tokens(jsonContent, tokens, tokens_len, json);
-        }
-        // free(json);
-        // free(tokens);
+    unsigned int tokens_capacity = 1 + jsonString.size / 2;
+    json_token_t *tokens = arrayPush(arena, json_token_t, tokens_capacity);
+    unsigned int size_req;
+    int tokens_len = json_tokenize((char *)jsonString.data, jsonString.size, tokens, tokens_capacity, &size_req);
+    if (tokens_len > 0) {
+        json = arenaPush(arena, size_req);
+        json_parse_tokens((char *)jsonString.data, tokens, tokens_len, json);
     }
 
     assert(json->type == JSON_OBJECT);
@@ -257,7 +235,7 @@ parseCPUProfileJSON(char *jsonContent, int length) {
         } else if(strcmp(name, "samples") == 0) {
             assert(value->type == JSON_ARRAY);
             cpuprofile.sampleCount = value->len;
-            cpuprofile.samples = malloc(sizeof(int) * cpuprofile.sampleCount);
+            cpuprofile.samples = arrayPush(arena, int, cpuprofile.sampleCount);
 
             readJsonNumberArray(value, cpuprofile.samples);
             for(int i = 0 ; i < cpuprofile.sampleCount; i++) {
@@ -266,15 +244,15 @@ parseCPUProfileJSON(char *jsonContent, int length) {
         } else if(strcmp(name, "timeDeltas") == 0) {
             assert(value->type == JSON_ARRAY);
             cpuprofile.deltaCount = value->len;
-            cpuprofile.deltas = malloc(sizeof(int) * cpuprofile.deltaCount);
+            cpuprofile.deltas = arrayPush(arena, int, cpuprofile.sampleCount);
 
             readJsonNumberArray(value, cpuprofile.deltas);
         } else if(strcmp(name, "nodes") == 0) {
             assert(value->type == JSON_ARRAY);
             cpuprofile.sampleNodeCount = value->len;
-            cpuprofile.sampleNodes = (SampleNode *)malloc(sizeof(SampleNode) * cpuprofile.sampleNodeCount);
+            cpuprofile.sampleNodes = arrayPush(arena, SampleNode, cpuprofile.sampleNodeCount);
 
-            parseSampleNodes(value, cpuprofile.sampleNodes);
+            parseSampleNodes(arena, value, cpuprofile.sampleNodes);
         }
     }
 
@@ -307,7 +285,7 @@ unpackStack(CPUProfile *profile) {
 }
 
 static char *
-getOutputPath(char *inputPath) {
+getOutputPath(Arena *arena, char *inputPath) {
     int inputPathLength = strlen(inputPath);
 
     for(int i = inputPathLength - 1; i >= 0; i--) {
@@ -318,7 +296,7 @@ getOutputPath(char *inputPath) {
     }
 
     const char *ext = "_spall.json";
-    char *outputPath = malloc(inputPathLength + strlen(ext) + 1);
+    char *outputPath = arrayPush(arena, char, inputPathLength + strlen(ext) + 1);
     strncpy(outputPath, inputPath, inputPathLength);
     strncpy(outputPath + inputPathLength, ext, strlen(ext) + 1);
 
@@ -351,9 +329,8 @@ writeNumber(char *output, int value) {
     return written;
 }
 
-static void
-writeOutput(FILE *f, EvalStack *stack, CPUProfile cpuprofile) {
-
+static String
+writeOutput(Arena *arena, EvalStack *stack, CPUProfile cpuprofile) {
     int entries = 0;
     int funcNameLengths = 0;
     for(EmitedEvalStackEntries *node = stack->emitted.head; node; node = node->next) {
@@ -368,7 +345,7 @@ writeOutput(FILE *f, EvalStack *stack, CPUProfile cpuprofile) {
     int LINE_MAX_SIZE = 96;
     int outputSize = entries * LINE_MAX_SIZE + OVERHEAD_SIZE + funcNameLengths;
 
-    char *output = malloc(outputSize);
+    char *output = arrayPush(arena, char, outputSize);
     char *outputPtr = output;
     memcpy(outputPtr, "{ \"traceEvents\": [\n", 19);
     outputPtr += 19;
@@ -392,46 +369,49 @@ writeOutput(FILE *f, EvalStack *stack, CPUProfile cpuprofile) {
         }
     }
 
-    memcpy(outputPtr - 2, "\n]}\n", 3);
+    memcpy(outputPtr - 2, "\n]}\n", 4);
+    outputPtr += 4;
 
-    fprintf(f, "%s", output);
+    return (String) { (u8 *)output, outputPtr - output };
+}
+
+static String
+convertToPerfetto(Arena *arena, String input) {
+    CPUProfile cpuprofile = parseCPUProfileJSON(arena, input);
+    EvalStack stack = unpackStack(&cpuprofile);
+
+    return writeOutput(arena, &stack, cpuprofile);
 }
 
 static void
-convertFile(char *path) {
-    char *content = readEntireFile(path);
-    if(!content) {
-        return;
-    }
-    int length = strlen(content);
+convertFile(Arena *arena, char *path) {
+    String input = readFileIntoString(arena, path);
+    String output = convertToPerfetto(arena, input);
 
-    CPUProfile cpuprofile = parseCPUProfileJSON(content, length);
-    EvalStack stack = unpackStack(&cpuprofile);
-
-    char *outputPath = getOutputPath(path);
+    char *outputPath = getOutputPath(arena, path);
     FILE *f = fopen(outputPath, "w");
     if(!f) {
         fprintf(stderr, "Failed to open file [%s] for writing\n", outputPath);
         return;
     }
 
-    writeOutput(f, &stack, cpuprofile);
+    fprintf(f, "%s", output.data);
     fclose(f);
 
     printf("Converted %s to %s\n", path, outputPath);
 }
 
 int main(int argCount, char **args) {
+    Arena arena = arenaCreate(64 * MEGABYTE, 4096, 32);
     if(argCount < 2) {
         fprintf(stderr, "Usage: convert file.cpuprofile\n");
         return 1;
     }
 
-    int buffer_size = 1 * 1024 * 1024;
-	unsigned char *buffer = malloc(buffer_size);
-
     for(int i = 1; i < argCount; i++) {
-        convertFile(args[i]);
+        u64 pos = arenaPos(&arena);
+        convertFile(&arena, args[i]);
+        arenaPopTo(&arena, pos);
     }
 
     return 0;
