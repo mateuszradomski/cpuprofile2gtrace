@@ -295,7 +295,7 @@ getOutputPath(Arena *arena, char *inputPath) {
         }
     }
 
-    const char *ext = "_spall.json";
+    const char *ext = "_gtrace.json";
     char *outputPath = arrayPush(arena, char, inputPathLength + strlen(ext) + 1);
     strncpy(outputPath, inputPath, inputPathLength);
     strncpy(outputPath + inputPathLength, ext, strlen(ext) + 1);
