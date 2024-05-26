@@ -5,6 +5,6 @@ You can use this two ways:
 - use [this website](convert.matradoski.com), it's the wasm version of this repo
 - clone, compile the `convert.c` file like `clang -O2 convert.c -o convert` and use like `./convert <cpuprofile files to convert>`
 
-Running it, generate file of the same name with the extension replaced by `_spall.json`.
+Running it generates a file at the same path with the extension replaced by `_spall.json`.
 
 This was written for use with [spall](https://github.com/colrdavidson/spall-web).
