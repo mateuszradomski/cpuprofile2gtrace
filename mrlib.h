@@ -20,13 +20,44 @@ typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
 
+typedef float f32;
+typedef double f64;
+
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
+#define CLAMP(a,min,max) (MIN(MAX((a), min), max))
+#define BETWEEN(x,min,max) ((x) >= (min) && (x) <= (max))
 #define ARRAY_LENGTH(a) (sizeof((a))/sizeof((a)[0]))
 
 #define KILOBYTE (1024)
 #define MEGABYTE (1024 * KILOBYTE)
 #define GIGABYTE (1024 * MEGABYTE)
+
+#define U8_MAX  (0xFF)
+#define U8_MIN  (0x00)
+#define S8_MAX  (0x7F)
+#define S8_MIN  (-0x80)
+
+#define U16_MAX (0xFFFF)
+#define U16_MIN (0x0000)
+#define S16_MAX (0x7FFF)
+#define S16_MIN (-0x8000)
+
+#define U32_MAX (0xFFFFFFFF)
+#define U32_MIN (0x00000000)
+#define S32_MAX (0x7FFFFFFF)
+#define S32_MIN (-0x80000000)
+
+#define U64_MAX (0xFFFFFFFFFFFFFFFF)
+#define U64_MIN (0x0000000000000000)
+#define S64_MAX (0x7FFFFFFFFFFFFFFF)
+#define S64_MIN (-0x8000000000000000)
+
+#define F32_MAX (*(float*)&(uint32_t){0x7F800000})
+#define F32_MIN (*(float*)&(uint32_t){0xFF800000})
+
+#define F64_MAX (*(double*)&(uint64_t){0x7FF0000000000000})
+#define F64_MIN (*(double*)&(uint64_t){0xFFF0000000000000})
 
 #define SLL_STACK_PUSH_(H,N) N->next=H,H=N
 #define SLL_STACK_POP_(H) H=H=H->next
@@ -62,6 +93,14 @@ openFile(const char *filepath) {
 static void
 readFile(FileHandle handle, u8 *out, u64 length) {
 	ReadFile(handle, out, length, NULL, NULL);
+}
+
+static void
+writeFile(FileHandle handle, u8 *data, u64 length) {
+    DWORD bytesWritten = 0;
+
+    WriteFile(handle, data, length, &bytesWritten, NULL);
+    assert(bytesWritten == length);
 }
 
 static void
@@ -215,7 +254,7 @@ fileStat(const char *path) {
 
 static FileHandle
 openFile(const char *filepath) {
-    return open(filepath, O_RDWR);
+    return open(filepath, O_RDWR | O_CREAT);
 }
 
 static void
@@ -224,27 +263,14 @@ readFile(FileHandle handle, u8 *out, u64 length) {
 }
 
 static void
+writeFile(FileHandle handle, u8 *data, u64 length) {
+    write(handle, data, length);
+}
+
+static void
 closeFile(FileHandle handle) {
     close(handle);
 }
-
-#else
-typedef int FileHandle;
-typedef struct stat64_t {
-    u64 st_size;
-} stat64_t;
-
-static stat64_t
-fileStat(const char *path) { return (stat64_t){ 0 }; }
-
-static FileHandle
-openFile(const char *filepath) { return 0; }
-
-static void
-readFile(FileHandle handle, u8 *out, u64 length) {}
-
-static void
-closeFile(FileHandle handle) {}
 
 #endif
 
@@ -310,7 +336,7 @@ cursorCommitChunk(MemoryCursor *cursor, u8 *pointer, u64 size) {
         size = MIN(MAX(256 * MEGABYTE, size), trailingSize);
 #if _WIN32
         VirtualAlloc(pointer, size, MEM_COMMIT, PAGE_READWRITE);
-#elif __APPLE__ || __linux__
+#else
         u64 pageSize = 16 * KILOBYTE;
         void *alignedPointer = (void *)((size_t)pointer & ~(pageSize - 1));
         size_t additionalSize = (size_t)pointer - (size_t)alignedPointer;
@@ -320,22 +346,25 @@ cursorCommitChunk(MemoryCursor *cursor, u8 *pointer, u64 size) {
     }
 }
 
+static u64
+roundUp(u64 v, u64 multiple) {
+    return ((v + multiple - 1) / multiple) * multiple;
+}
+
 static MemoryCursorNode *
 arenaAddNode(Arena *arena, size_t size) {
     MemoryCursorNode *result = 0x0;
 
     assert(arena);
-    size = MAX(arena->chunkSize, size);
+    size += sizeof(MemoryCursorNode);
+    size = roundUp(size, arena->chunkSize);
     
-    u64 allocSize = size + sizeof(MemoryCursorNode);
 #ifdef _WIN32
-    void *memory = (u8 *)VirtualAlloc(NULL, allocSize, MEM_RESERVE, PAGE_READWRITE);
+    void *memory = (u8 *)VirtualAlloc(NULL, size, MEM_RESERVE, PAGE_READWRITE);
     VirtualAlloc(memory, sizeof(MemoryCursorNode), MEM_COMMIT, PAGE_READWRITE);
-#elif __APPLE__ || __linux__
-    void *memory = mmap(0, allocSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    mprotect(memory, sizeof(MemoryCursorNode), PROT_READ | PROT_WRITE);
 #else
-    void *memory = malloc(allocSize);
+    void *memory = mmap(0, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    mprotect(memory, sizeof(MemoryCursorNode), PROT_READ | PROT_WRITE);
 #endif
 
     assert(memory);
@@ -345,7 +374,7 @@ arenaAddNode(Arena *arena, size_t size) {
     result->cursor.basePointer = (u8 *)memory + sizeof(MemoryCursorNode);
     result->cursor.cursorPointer = result->cursor.basePointer;
     result->cursor.commitedTo = result->cursor.basePointer;
-    result->cursor.size = size;
+    result->cursor.size = size - sizeof(MemoryCursorNode);
     SLL_STACK_PUSH(arena->cursorNode, result);
     
     return result;
@@ -364,10 +393,8 @@ cursorDestroy(MemoryCursor *cursor) {
 
 #ifdef _WIN32
         VirtualFree(pointer, 0, MEM_RELEASE);
-#elif __APPLE__ || __linux__
-        munmap(pointer, cursor->size + sizeof(MemoryCursorNode));
 #else
-        free(pointer);
+        munmap(pointer, cursor->size + sizeof(MemoryCursorNode));
 #endif
     }
 }
@@ -465,10 +492,11 @@ arenaPush(Arena *arena, size_t size) {
         if(size + paddingNeeded > bytesLeft) {
             cursorNode = arenaAddNode(arena, size + paddingNeeded);
             cursor = &cursorNode->cursor;
+
+            // Since cursorPointer is new, we need to recalculate it
+            paddingNeeded = (arena->alignment - ((size_t)cursor->cursorPointer & alignmentMask)) & alignmentMask;
         }
 
-        // Since cursorPointer is new, we need to recalculate it
-        paddingNeeded = (arena->alignment - ((size_t)cursor->cursorPointer & alignmentMask)) & alignmentMask;
         cursorCommitChunk(cursor, cursor->cursorPointer, paddingNeeded + size);
         cursor->cursorPointer += paddingNeeded;
         result = cursor->cursorPointer;
@@ -548,7 +576,7 @@ arenaClear(Arena *arena) {
 typedef struct String
 {
     u8 *data;
-    size_t size;     
+    u64 size;     
 } String;
 
 typedef struct SplitIterator
@@ -748,6 +776,49 @@ xorshift32(u32 value) {
 	x ^= x >> 17;
 	x ^= x << 5;
 	return x;
+}
+
+static u64
+xorshift64(u64 value) {
+	uint64_t x = value;
+	x ^= x << 13;
+	x ^= x >> 7;
+	x ^= x << 17;
+	return x;
+}
+
+static u64
+randomInRange(u64 atLeast, u64 to) {
+    static u64 state = 0;
+    if(state == 0) {
+        state = readCPUTimer();
+    }
+
+    u64 range = to - atLeast;
+
+    state = xorshift64(state);
+    u64 x = state;
+    __uint128_t m = (__uint128_t)(x) * (__uint128_t)(range);
+    u64 l = (u64)m;
+
+    if(l < range) {
+        u64 t = -range;
+        if(t >= range) {
+            t -= range;
+            if(t >= range) {
+                 t %= range;
+            }
+        }
+        while(l < t) {
+            state = xorshift64(state);
+            x = state;
+            m = x * range;
+            l = (u64)m;
+
+        }
+    }
+
+    return atLeast + (u64)(m >> 64);
 }
 
 #endif
