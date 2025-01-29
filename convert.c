@@ -332,7 +332,7 @@ writeNumber(char *output, int value) {
 }
 
 static String
-writeOutput(Arena *arena, EvalStack *stack, CPUProfile cpuprofile) {
+writeGTraceOutput(Arena *arena, EvalStack *stack, CPUProfile cpuprofile) {
     int entries = 0;
     int funcNameLengths = 0;
     for(EmitedEvalStackEntries *node = stack->emitted.head; node; node = node->next) {
@@ -378,20 +378,20 @@ writeOutput(Arena *arena, EvalStack *stack, CPUProfile cpuprofile) {
 }
 
 static String
-convertToPerfetto(Arena *arena, String input) {
+convertToGTrace(Arena *arena, String input) {
     CPUProfile cpuprofile = parseCPUProfileJSON(arena, input);
     EvalStack stack = unpackStack(&cpuprofile);
 
-    return writeOutput(arena, &stack, cpuprofile);
+    return writeGTraceOutput(arena, &stack, cpuprofile);
 }
 
 #ifdef EMSCRIPTEN
 String result = { 0 };
 
-String *convertStringToPerfetto(const char *string, int len) {
+String *convertStringToGTrace(const char *string, int len) {
     Arena arena = arenaCreate(64 * MEGABYTE, 4096, 32);
     String input = { (u8 *)string, len };
-    result = convertToPerfetto(&arena, input);
+    result = convertToGTrace(&arena, input);
     arenaDestroy(&arena);
     return &result;
 }
@@ -405,7 +405,7 @@ static void
 convertFile(Arena *arena, char *path) {
     u64 elapsed = -readCPUTimer();
     String input = readFileIntoString(arena, path);
-    String output = convertToPerfetto(arena, input);
+    String output = convertToGTrace(arena, input);
 
     char *outputPath = getOutputPath(arena, path);
     FILE *f = fopen(outputPath, "w");
