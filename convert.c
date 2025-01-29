@@ -10,11 +10,6 @@
 #include "pl_json.h"
 
 #include <time.h>
-double get_time_in_micros(void) {
-	struct timespec spec;
-	clock_gettime(CLOCK_MONOTONIC, &spec);
-	return (((double)spec.tv_sec) * 1000000) + (((double)spec.tv_nsec) / 1000);
-}
 
 typedef struct SampleNode {
     const char *funcName;
