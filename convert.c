@@ -398,6 +398,9 @@ String *convertStringToPerfetto(const char *string, int len) {
 #endif
 
 #ifndef EMSCRIPTEN
+
+#include <dirent.h>
+
 static void
 convertFile(Arena *arena, char *path) {
     String input = readFileIntoString(arena, path);
@@ -416,6 +419,27 @@ convertFile(Arena *arena, char *path) {
     printf("Converted %s to %s\n", path, outputPath);
 }
 
+static void
+convertDirectory(Arena *arena, char *path) {
+    DIR *dir = opendir(path);
+    if(dir == NULL) {
+        fprintf(stderr, "Failed to open directory = [%s]\n", path);
+        exit(EXIT_FAILURE);
+    }
+
+    String extension = LIT_TO_STR(".cpuprofile");
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        String fileName = { .data = (u8 *)entry->d_name, .size = strlen(entry->d_name) };
+        if(stringEndsWith(fileName, extension)) {
+            u64 pos = arenaPos(arena);
+            convertFile(arena, entry->d_name);
+            arenaPopTo(arena, pos);
+        }
+    }
+
+    closedir(dir);
+}
 
 int main(int argCount, char **args) {
     Arena arena = arenaCreate(64 * MEGABYTE, 4096, 32);
@@ -425,9 +449,14 @@ int main(int argCount, char **args) {
     }
 
     for(int i = 1; i < argCount; i++) {
-        u64 pos = arenaPos(&arena);
-        convertFile(&arena, args[i]);
-        arenaPopTo(&arena, pos);
+        stat64_t stat = fileStat(args[i]);
+        if(stat.st_mode & S_IFDIR) {
+            convertDirectory(&arena, args[i]);
+        } else {
+            u64 pos = arenaPos(&arena);
+            convertFile(&arena, args[i]);
+            arenaPopTo(&arena, pos);
+        }
     }
 
     return 0;

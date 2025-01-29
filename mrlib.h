@@ -683,6 +683,25 @@ stringMatch(String a, String b) {
     }
 }
 
+static bool
+stringEndsWith(String a, String b) {
+    assert(b.size > 0);
+    assert(a.size > 0);
+    if(b.size > a.size) {
+        return false;
+    }
+
+    u64 offset = a.size - b.size;
+    for(u32 i = 0; i < b.size; i++) {
+        if(a.data[offset + i] != b.data[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
 static String
 stringNextInSplit(SplitIterator *it) {
     String result = { 0 };
