@@ -403,6 +403,7 @@ String *convertStringToPerfetto(const char *string, int len) {
 
 static void
 convertFile(Arena *arena, char *path) {
+    u64 elapsed = -readCPUTimer();
     String input = readFileIntoString(arena, path);
     String output = convertToPerfetto(arena, input);
 
@@ -416,7 +417,10 @@ convertFile(Arena *arena, char *path) {
     fprintf(f, "%s", output.data);
     fclose(f);
 
-    printf("Converted %s to %s\n", path, outputPath);
+    elapsed += readCPUTimer();
+    u64 elapsedNs = cyclesToNanoSeconds(elapsed, readCPUFrequency());
+    String duration = pushStringNanoSeconds(arena, elapsedNs);
+    printf("[%8.*s] Converted ➔ %s\n", STRFMT(duration), outputPath);
 }
 
 static void

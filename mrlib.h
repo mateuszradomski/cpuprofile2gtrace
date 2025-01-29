@@ -311,6 +311,35 @@ readCPUTimer()
 #endif
 }
 
+static u64
+readCPUFrequency()
+{
+#if defined(__x86_64__) || defined(_M_AMD64)
+    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+    __cpuid(0x15, eax, ebx, ecx, edx);
+    if (eax != 0 && ebx != 0) {
+        // freq in Hz = (EBX / EAX) * 1000
+        return ((unsigned long long)ebx / (unsigned long long) eax) * 1000ULL;
+    } else {
+        // Fallback: CPUID(0x16) often gives base frequency in MHz
+        __cpuid(0x16, eax, ebx, ecx, edx);
+        if (eax) {
+            return (unsigned long long)eax * 1000000ULL;
+        }
+    }
+    return 0;
+#else
+    u64 tsc = 0;
+    asm volatile("mrs %0, cntfrq_el0" : "=r"(tsc));
+    return tsc;
+#endif
+}
+
+static u64
+cyclesToNanoSeconds(u64 cycles, u64 frequency) {
+    return (cycles * 1e9) / frequency;
+}
+
 typedef struct MemoryCursor {
     u8* basePointer;
     u8* cursorPointer;
@@ -571,6 +600,7 @@ arenaClear(Arena *arena) {
 #define structPush(a, T) ((T *)arenaPush((a), sizeof(T)))
 #define bytesPush(a, c) (arenaPush((a), (c)))
 
+#define STRFMT(s) (int)(s).size, (s).data
 #define LIT_TO_STR(a) ((String){ .data = (u8 *)a, .size = (sizeof(a) - 1) })
 
 typedef struct String
@@ -633,6 +663,25 @@ pushStringSI(Arena *arena, u64 bytes) {
 
     u64 order = (u64)(log2(bytes) / log2(1000));
     double newValue = (double)bytes / pow(1000, order);
+
+    return pushStringf(arena, "%0.2f%s", newValue, orderPrefix[order]);
+}
+
+static String
+pushStringNanoSeconds(Arena *arena, u64 ns) {
+    if(ns == 0) {
+        return pushStringf(arena, "0ns");
+    }
+
+    static const char *orderPrefix[] = {
+        "ns",
+        "us",
+        "ms",
+        "s",
+    };
+
+    u64 order = (u64)(log2(ns) / log2(1000));
+    double newValue = (double)ns / pow(1000, order);
 
     return pushStringf(arena, "%0.2f%s", newValue, orderPrefix[order]);
 }
