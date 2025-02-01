@@ -39,7 +39,7 @@ typedef struct EvalStackEntry {
 
 typedef struct EmitedEvalStackEntries {
     EvalStackEntry entries[8192];
-    s32 count;
+    u32 count;
     struct EmitedEvalStackEntries *next;
 } EmitedEvalStackEntries;
 
@@ -93,7 +93,6 @@ parseSampleNode(Arena *arena, json_t *node) {
             }
         } else if(strcmp(name, "callFrame") == 0) {
             assert(value->type == JSON_OBJECT);
-            json_t *obj = values + i;
 
             json_t *callFrameValues = json_values(value);
             char **callFrameKeys = json_keys(value);
@@ -171,8 +170,8 @@ static void
 evalStackTrace(EvalStack *stack, SampleNode *nodes, NodeParents *parents, s32 nodeId, s32 timeDelta) {
     if(nodeId == 0) { return; }
 
-    static s32 unwoundStack[STACK_SIZE] = { 0 };
-    s32 stackDepth = 0;
+    static u32 unwoundStack[STACK_SIZE] = { 0 };
+    u32 stackDepth = 0;
     if(stringMatch(nodes[nodeId].funcName, LIT_TO_STR("(garbage collector)"))) {
         unwoundStack[0] = nodeId;
         for(s32 i = 0; i < stack->length; i++) {
@@ -192,9 +191,9 @@ evalStackTrace(EvalStack *stack, SampleNode *nodes, NodeParents *parents, s32 no
 
     stack->length = stackDepth;
 
-    for(s32 i = 0; i < stackDepth; i++) {
+    for(u32 i = 0; i < stackDepth; i++) {
         nodeId = unwoundStack[stackDepth - i - 1];
-        assert(i < ARRAY_LENGTH(stack->stack));
+        assert((u32)i < ARRAY_LENGTH(stack->stack));
         EvalStackEntry *entry = stack->stack + i;
 
         if(entry->sampleNodeId != nodeId) {
@@ -383,7 +382,7 @@ writeGTraceOutput(Arena *arena, EvalStack *stack, CPUProfile cpuprofile) {
     s32 funcNameLengths = 0;
     for(EmitedEvalStackEntries *node = stack->emitted.head; node; node = node->next) {
         entries += node->count;
-        for(s32 i = 0; i < node->count; i++) {
+        for(u32 i = 0; i < node->count; i++) {
             EvalStackEntry *e = node->entries + i;
             funcNameLengths += cpuprofile.sampleNodes[e->sampleNodeId].funcName.size;
         }
@@ -399,7 +398,7 @@ writeGTraceOutput(Arena *arena, EvalStack *stack, CPUProfile cpuprofile) {
     outputPtr += 19;
 
     for(EmitedEvalStackEntries *node = stack->emitted.head; node; node = node->next) {
-        for(s32 i = 0; i < node->count; i++) {
+        for(u32 i = 0; i < node->count; i++) {
             EvalStackEntry *e = node->entries + i;
             // This is for speeeeed
             memcpy(outputPtr, "{\"dur\":", 7);
@@ -511,7 +510,6 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
     String emptyString = LIT_TO_STR("");
     for(s32 i = 0; i < profile->sampleCount; i++) {
         s32 nodeId = profile->samples[i]; 
-        s32 delta = profile->deltas[i]; 
 
         bool isNodeGC = stringMatch(nodes[nodeId].funcName, LIT_TO_STR("(garbage collector)"));
         if(isNodeGC) {
