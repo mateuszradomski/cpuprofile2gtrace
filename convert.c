@@ -17,8 +17,7 @@ typedef enum OutputType {
 } OutputType;
 
 typedef struct SampleNode {
-    const char *funcName;
-    int funcNameLength;
+    String funcName;
     int id;
     int childCount;
     int *childs;
@@ -99,12 +98,9 @@ parseSampleNode(Arena *arena, json_t *node) {
             for(size_t j = 0; j < value->len; j++) {
                 char *name = callFrameKeys[j];
                 if(strcmp(name, "functionName") == 0) {
-                    result.funcName = callFrameValues[j].string;
-                    result.funcNameLength = callFrameValues[j].len;
-                    // result.funcName = ((struct json_string_s *)J->value->payload)->string;
-                    if(strlen(result.funcName) == 0) {
-                        result.funcName = "(anonymous)";
-                        result.funcNameLength = strlen(result.funcName);
+                    result.funcName = (String){ .data = (u8 *)callFrameValues[j].string, .size = callFrameValues[j].len };
+                    if(result.funcName.size == 0) {
+                        result.funcName = LIT_TO_STR("(anonymous)");
                     }
                     break;
                 }
@@ -113,7 +109,7 @@ parseSampleNode(Arena *arena, json_t *node) {
     }
 
     assert(result.id > 0);
-    assert(result.funcName);
+    assert(result.funcName.size > 0);
 
     return result;
 }
@@ -158,7 +154,7 @@ evalStackTrace(EvalStack *stack, SampleNode *nodes, NodeParents *parents, int no
 
     static int unwoundStack[STACK_SIZE] = { 0 };
     int stackDepth = 0;
-    if(strcmp(nodes[nodeId].funcName, "(garbage collector)") == 0) {
+    if(stringMatch(nodes[nodeId].funcName, LIT_TO_STR("(garbage collector)"))) {
         unwoundStack[0] = nodeId;
         for(int i = 0; i < stack->length; i++) {
             unwoundStack[i+1] = stack->stack[stack->length - i - 1].sampleNodeId;
@@ -370,7 +366,7 @@ writeGTraceOutput(Arena *arena, EvalStack *stack, CPUProfile cpuprofile) {
         entries += node->count;
         for(int i = 0; i < node->count; i++) {
             EvalStackEntry *e = node->entries + i;
-            funcNameLengths += cpuprofile.sampleNodes[e->sampleNodeId].funcNameLength;
+            funcNameLengths += cpuprofile.sampleNodes[e->sampleNodeId].funcName.size;
         }
     }
 
@@ -392,8 +388,8 @@ writeGTraceOutput(Arena *arena, EvalStack *stack, CPUProfile cpuprofile) {
             outputPtr += writeNumber(outputPtr, e->duration);
             memcpy(outputPtr, ",\"name\":\"", 9);
             outputPtr += 9;
-            memcpy(outputPtr, cpuprofile.sampleNodes[e->sampleNodeId].funcName, cpuprofile.sampleNodes[e->sampleNodeId].funcNameLength);
-            outputPtr += cpuprofile.sampleNodes[e->sampleNodeId].funcNameLength;
+            memcpy(outputPtr, cpuprofile.sampleNodes[e->sampleNodeId].funcName.data, cpuprofile.sampleNodes[e->sampleNodeId].funcName.size);
+            outputPtr += cpuprofile.sampleNodes[e->sampleNodeId].funcName.size;
             memcpy(outputPtr, "\",\"ph\":\"X\",\"tid\":1,\"ts\":", 24);
             outputPtr += 24;
             outputPtr += writeNumber(outputPtr, e->startTime);
@@ -433,8 +429,8 @@ writeF64(void *ptr, f64 v) {
 }
 
 static u64
-writeSpallBeginMarker(u8 *output, f64 timestamp, const char *name, u32 length) {
-    assert(length <= 255);
+writeSpallBeginMarker(u8 *output, f64 timestamp, String name) {
+    assert(name.size <= 255);
 
     u8 *base = output;
     output += writeU8(output, 3);
@@ -444,11 +440,11 @@ writeSpallBeginMarker(u8 *output, f64 timestamp, const char *name, u32 length) {
     output += writeU32(output, 1);
     output += writeF64(output, timestamp);
 
-    output += writeU8(output, length);
+    output += writeU8(output, name.size);
     output += writeU8(output, 0);
 
-    memcpy(output, name, length);
-    output += length;
+    memcpy(output, name.data, name.size);
+    output += name.size;
 
     return output - base;
 }
@@ -485,11 +481,11 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
         int nodeId = profile->samples[i]; 
         int delta = profile->deltas[i]; 
 
-        bool isNodeGC = strcmp(nodes[nodeId].funcName, "(garbage collector)") == 0;
+        bool isNodeGC = stringMatch(nodes[nodeId].funcName, LIT_TO_STR("(garbage collector)"));
         if(isNodeGC) {
             if(!wasGC) {
                 wasGC = true;
-                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, nodes[nodeId].funcName, nodes[nodeId].funcNameLength);
+                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, nodes[nodeId].funcName);
             }
         } else {
             if(wasGC) {
@@ -533,7 +529,7 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
 
             for(s64 i = pushedCount - 1; i >= 0; i--) {
                 SampleNode *n = &nodes[push[i]];
-                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, n->funcName, n->funcNameLength);
+                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, n->funcName);
             }
 
             previousNode = nodeId;
