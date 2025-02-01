@@ -108,6 +108,12 @@ parseSampleNode(Arena *arena, json_t *node) {
                     }
                 } else if(strcmp(name, "url") == 0) {
                     result.path = (String){ .data = (u8 *)callFrameValues[j].string, .size = callFrameValues[j].len };
+
+                    String filePrefix = LIT_TO_STR("file://");
+                    if(stringStartsWith(result.path, filePrefix)) {
+                        result.path.data += filePrefix.size;
+                        result.path.size -= filePrefix.size;
+                    }
                 } else if(strcmp(name, "lineNumber") == 0) {
                     lineNumber = callFrameValues[j].number;
                 } else if(strcmp(name, "columnNumber") == 0) {

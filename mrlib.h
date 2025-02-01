@@ -733,6 +733,22 @@ stringMatch(String a, String b) {
 }
 
 static bool
+stringStartsWith(String a, String b) {
+    assert(b.size > 0);
+    if(b.size > a.size) {
+        return false;
+    }
+
+    for(u32 i = 0; i < b.size; i++) {
+        if(a.data[i] != b.data[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool
 stringEndsWith(String a, String b) {
     assert(b.size > 0);
     assert(a.size > 0);
