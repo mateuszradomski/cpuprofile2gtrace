@@ -595,6 +595,7 @@ String *convertStringToGTrace(const char *string, s32 len) {
 
 #ifndef EMSCRIPTEN
 
+bool deleteInputFiles = false;
 #include <dirent.h>
 
 static void
@@ -630,6 +631,13 @@ convertFile(OutputType outputType, Arena *arena, char *path) {
     u64 elapsedNs = cyclesToNanoSeconds(elapsed, readCPUFrequency());
     String duration = pushStringNanoSeconds(arena, elapsedNs);
     printf("[%8.*s] Converted ➔ %s\n", STRFMT(duration), outputPath);
+
+    if(deleteInputFiles) {
+        int failed = remove(path);
+        if(failed) {
+            printf("Failed to delete input file [%s]\n", path);
+        }
+    }
 }
 
 static void
@@ -663,13 +671,18 @@ s32 main(s32 argCount, char **args) {
     }
 
     for(s32 i = 1; i < argCount; i++) {
-        stat64_t stat = fileStat(args[i]);
-        if(stat.st_mode & S_IFDIR) {
-            convertDirectory(outputType, &arena, args[i]);
+        String arg = { .data = (u8 *)args[i], .size = strlen(args[i]) };
+        if(stringMatch(arg, LIT_TO_STR("-d"))) {
+            deleteInputFiles = true;
         } else {
-            u64 pos = arenaPos(&arena);
-            convertFile(outputType, &arena, args[i]);
-            arenaPopTo(&arena, pos);
+            stat64_t stat = fileStat(args[i]);
+            if(stat.st_mode & S_IFDIR) {
+                convertDirectory(outputType, &arena, args[i]);
+            } else if(stat.st_mode & S_IFREG) {
+                u64 pos = arenaPos(&arena);
+                convertFile(outputType, &arena, args[i]);
+                arenaPopTo(&arena, pos);
+            }
         }
     }
 
