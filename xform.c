@@ -670,7 +670,7 @@ s32 main(s32 argCount, char **args) {
     OutputType outputType = OutputType_Spall;
     Arena arena = arenaCreate(64 * MEGABYTE, 4096, 32);
     if(argCount < 2) {
-        fprintf(stderr, "Usage: convert file.cpuprofile\n");
+        fprintf(stderr, "Usage: xform file.cpuprofile\n");
         return 1;
     }
 
