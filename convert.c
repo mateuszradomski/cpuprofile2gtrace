@@ -444,7 +444,7 @@ writeSpallBeginMarker(u8 *output, f64 timestamp, String name, String path) {
     output += writeF64(output, timestamp);
 
     static char buffer[256];
-    int written = sprintf(buffer, "%.*s: %.*s", STRFMT(name), STRFMT(path));
+    int written = snprintf(buffer, sizeof(buffer), "%.*s: %.*s", STRFMT(name), STRFMT(path));
 
     output += writeU8(output, written);
     output += writeU8(output, 0);
