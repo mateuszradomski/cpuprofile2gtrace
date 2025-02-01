@@ -448,7 +448,7 @@ writeF64(void *ptr, f64 v) {
 }
 
 static u64
-writeSpallBeginMarker(u8 *output, f64 timestamp, String name, String path, String location) {
+writeSpallBeginMarker(u8 *output, f64 timestamp, String fnName, String path, String location) {
     u8 *base = output;
     output += writeU8(output, 3);
     output += writeU8(output, 0);
@@ -457,16 +457,22 @@ writeSpallBeginMarker(u8 *output, f64 timestamp, String name, String path, Strin
     output += writeU32(output, 1);
     output += writeF64(output, timestamp);
 
-    static char buffer[256];
-    s32 written = snprintf(buffer, sizeof(buffer), "%.*s: %.*s", STRFMT(name), STRFMT(path));
+    String blockName;
+    if(path.size > 0) {
+        static char buffer[256];
+        blockName.data = (u8 *)buffer;
+        blockName.size = snprintf(buffer, sizeof(buffer), "%.*s: %.*s", STRFMT(fnName), STRFMT(path));
+    } else {
+        blockName = fnName;
+    }
 
-    assert(written <= 255);
+    assert(blockName.size <= 255);
 
-    output += writeU8(output, written);
+    output += writeU8(output, blockName.size);
     output += writeU8(output, location.size);
 
-    memcpy(output, buffer, written);
-    output += written;
+    memcpy(output, blockName.data, blockName.size);
+    output += blockName.size;
 
     memcpy(output, location.data, location.size);
     output += location.size;
