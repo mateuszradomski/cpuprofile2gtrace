@@ -18,6 +18,7 @@ typedef enum OutputType {
 
 typedef struct SampleNode {
     String funcName;
+    String path;
     int id;
     int childCount;
     int *childs;
@@ -102,7 +103,8 @@ parseSampleNode(Arena *arena, json_t *node) {
                     if(result.funcName.size == 0) {
                         result.funcName = LIT_TO_STR("(anonymous)");
                     }
-                    break;
+                } else if(strcmp(name, "url") == 0) {
+                    result.path = (String){ .data = (u8 *)callFrameValues[j].string, .size = callFrameValues[j].len };
                 }
             }
         }
@@ -429,8 +431,9 @@ writeF64(void *ptr, f64 v) {
 }
 
 static u64
-writeSpallBeginMarker(u8 *output, f64 timestamp, String name) {
+writeSpallBeginMarker(u8 *output, f64 timestamp, String name, String path) {
     assert(name.size <= 255);
+    assert(path.size <= 255);
 
     u8 *base = output;
     output += writeU8(output, 3);
@@ -440,11 +443,14 @@ writeSpallBeginMarker(u8 *output, f64 timestamp, String name) {
     output += writeU32(output, 1);
     output += writeF64(output, timestamp);
 
-    output += writeU8(output, name.size);
+    static char buffer[256];
+    int written = sprintf(buffer, "%.*s: %.*s", STRFMT(name), STRFMT(path));
+
+    output += writeU8(output, written);
     output += writeU8(output, 0);
 
-    memcpy(output, name.data, name.size);
-    output += name.size;
+    memcpy(output, buffer, written);
+    output += written;
 
     return output - base;
 }
@@ -485,7 +491,7 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
         if(isNodeGC) {
             if(!wasGC) {
                 wasGC = true;
-                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, nodes[nodeId].funcName);
+                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, nodes[nodeId].funcName, LIT_TO_STR(""));
             }
         } else {
             if(wasGC) {
@@ -529,7 +535,7 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
 
             for(s64 i = pushedCount - 1; i >= 0; i--) {
                 SampleNode *n = &nodes[push[i]];
-                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, n->funcName);
+                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, n->funcName, n->path);
             }
 
             previousNode = nodeId;
