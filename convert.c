@@ -9,7 +9,12 @@
 #define PL_JSON_IMPLEMENTATION
 #include "pl_json.h"
 
-#include <time.h>
+typedef enum OutputType {
+    OutputType_None,
+    OutputType_GTrace,
+    OutputType_Spall,
+    OutputType_Count,
+} OutputType;
 
 typedef struct SampleNode {
     const char *funcName;
@@ -22,6 +27,8 @@ typedef struct SampleNode {
 typedef struct NodeParents {
     int *array, length;
 } NodeParents;
+
+typedef NodeParents NodeDepths;
 
 typedef struct EvalStackEntry {
     int sampleNodeId;
@@ -198,7 +205,19 @@ typedef struct CPUProfile {
     int sampleNodeCount;
     SampleNode *sampleNodes;
     NodeParents parents;
+    NodeDepths depths;
 } CPUProfile;
+
+static void
+computeDepth(NodeDepths *depths, SampleNode *nodes, u32 nodeId, u32 depth) {
+    SampleNode *n = nodes + nodeId;
+    for(int j = 0; j < n->childCount; j++) {
+        u32 childId = n->childs[j] - 1;
+        assert(depths->array[childId] == 0);
+        depths->array[childId] = depth + 1;
+        computeDepth(depths, nodes, childId, depth + 1);
+    }
+}
 
 static CPUProfile
 parseCPUProfileJSON(Arena *arena, String jsonString) {
@@ -266,6 +285,10 @@ parseCPUProfileJSON(Arena *arena, String jsonString) {
         }
     }
 
+    cpuprofile.depths.length = cpuprofile.sampleNodeCount;
+    cpuprofile.depths.array = (int *)calloc(1, sizeof(cpuprofile.depths.array[0]) * cpuprofile.depths.length);
+    computeDepth(&cpuprofile.depths, cpuprofile.sampleNodes, 0, 0);
+
     return cpuprofile;
 }
 
@@ -282,7 +305,7 @@ unpackStack(CPUProfile *profile) {
 }
 
 static char *
-getOutputPath(Arena *arena, char *inputPath) {
+getOutputPath(OutputType outputType, Arena *arena, char *inputPath) {
     int inputPathLength = strlen(inputPath);
 
     for(int i = inputPathLength - 1; i >= 0; i--) {
@@ -292,7 +315,20 @@ getOutputPath(Arena *arena, char *inputPath) {
         }
     }
 
-    const char *ext = "_gtrace.json";
+    const char *ext;
+    switch(outputType) {
+        case OutputType_GTrace: {
+            ext = "_gtrace.json";
+            break;
+        }
+        case OutputType_Spall: {
+            ext = ".spall";
+            break;
+        }
+        default: {
+            assert(false && "Unexpected outputType");
+        }
+    }
     char *outputPath = arrayPush(arena, char, inputPathLength + strlen(ext) + 1);
     strncpy(outputPath, inputPath, inputPathLength);
     strncpy(outputPath + inputPathLength, ext, strlen(ext) + 1);
@@ -372,12 +408,155 @@ writeGTraceOutput(Arena *arena, EvalStack *stack, CPUProfile cpuprofile) {
     return (String) { (u8 *)output, outputPtr - output };
 }
 
+static u64
+writeU8(void *ptr, u8 v) {
+    ((u8 *)ptr)[0] = v;
+    return sizeof(u8);
+}
+
+static u64
+writeU32(void *ptr, u32 v) {
+    ((u32 *)ptr)[0] = v;
+    return sizeof(u32);
+}
+
+static u64
+writeU64(void *ptr, u64 v) {
+    ((u64 *)ptr)[0] = v;
+    return sizeof(u64);
+}
+
+static u64
+writeF64(void *ptr, f64 v) {
+    ((f64 *)ptr)[0] = v;
+    return sizeof(f64);
+}
+
+static u64
+writeSpallBeginMarker(u8 *output, f64 timestamp, const char *name, u32 length) {
+    assert(length <= 255);
+
+    u8 *base = output;
+    output += writeU8(output, 3);
+    output += writeU8(output, 0);
+
+    output += writeU32(output, 1);
+    output += writeU32(output, 1);
+    output += writeF64(output, timestamp);
+
+    output += writeU8(output, length);
+    output += writeU8(output, 0);
+
+    memcpy(output, name, length);
+    output += length;
+
+    return output - base;
+}
+
+static u64
+writeSpallEndMarker(u8 *output, f64 timestamp) {
+    u8 *base = output;
+    output += writeU8(output, 4);
+    output += writeU32(output, 1);
+    output += writeU32(output, 1);
+    output += writeF64(output, timestamp);
+    return output - base;
+}
+
+static String
+writeSpallOutput(Arena *arena, CPUProfile *profile) {
+    int outputSize = 10 * MEGABYTE;
+    u8 *output = arrayPush(arena, u8, outputSize);
+    u8 *outputPtr = output;
+
+    outputPtr += writeU64(outputPtr, 0x0BADF00D);
+    outputPtr += writeU64(outputPtr, 1);
+    outputPtr += writeF64(outputPtr, 1);
+    outputPtr += writeU64(outputPtr, 0);
+
+    int currentTime = 0;
+
+    NodeParents *parents = &profile->parents;
+    SampleNode *nodes = profile->sampleNodes;
+
+    int previousNode = 0;
+    bool wasGC = false;
+    for(int i = 0; i < profile->sampleCount; i++) {
+        int nodeId = profile->samples[i]; 
+        int delta = profile->deltas[i]; 
+
+        bool isNodeGC = strcmp(nodes[nodeId].funcName, "(garbage collector)") == 0;
+        if(isNodeGC) {
+            if(!wasGC) {
+                wasGC = true;
+                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, nodes[nodeId].funcName, nodes[nodeId].funcNameLength);
+            }
+        } else {
+            if(wasGC) {
+                wasGC = false;
+                outputPtr += writeSpallEndMarker(outputPtr, currentTime);
+            }
+
+            // Find the common node
+            int previousNodeDepth = profile->depths.array[previousNode];
+            int currentNodeDepth = profile->depths.array[nodeId];
+            int shallowest = MIN(previousNodeDepth, currentNodeDepth);
+
+            int previousNodeWalking = previousNode;
+            int currentNodeWalking = nodeId;
+            for(s64 i = 0; i < previousNodeDepth - shallowest; i++) {
+                previousNodeWalking = parents->array[previousNodeWalking];
+            }
+            for(s64 i = 0; i < currentNodeDepth - shallowest; i++) {
+                currentNodeWalking = parents->array[currentNodeWalking];
+            }
+
+            while(previousNodeWalking != currentNodeWalking) {
+                previousNodeWalking = parents->array[previousNodeWalking];
+                currentNodeWalking = parents->array[currentNodeWalking];
+            }
+
+            int commonNode = currentNodeWalking;
+            int walkingNode = previousNode;
+            while(walkingNode != commonNode) {
+                outputPtr += writeSpallEndMarker(outputPtr, currentTime);
+                walkingNode = parents->array[walkingNode];
+            }
+
+            static int push[STACK_SIZE] = { 0 };
+            int pushedCount = 0;
+            walkingNode = nodeId;
+            while(walkingNode != commonNode) {
+                push[pushedCount++] = walkingNode;
+                walkingNode = parents->array[walkingNode];
+            }
+
+            for(s64 i = pushedCount - 1; i >= 0; i--) {
+                SampleNode *n = &nodes[push[i]];
+                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, n->funcName, n->funcNameLength);
+            }
+
+            previousNode = nodeId;
+        }
+
+        currentTime += profile->deltas[i];
+    }
+
+    return (String) { (u8 *)output, outputPtr - output };
+}
+
 static String
 convertToGTrace(Arena *arena, String input) {
     CPUProfile cpuprofile = parseCPUProfileJSON(arena, input);
     EvalStack stack = unpackStack(&cpuprofile);
 
     return writeGTraceOutput(arena, &stack, cpuprofile);
+}
+
+static String
+convertToSpall(Arena *arena, String input) {
+    CPUProfile cpuprofile = parseCPUProfileJSON(arena, input);
+    return writeSpallOutput(arena, &cpuprofile);
 }
 
 #ifdef EMSCRIPTEN
@@ -397,19 +576,32 @@ String *convertStringToGTrace(const char *string, int len) {
 #include <dirent.h>
 
 static void
-convertFile(Arena *arena, char *path) {
+convertFile(OutputType outputType, Arena *arena, char *path) {
     u64 elapsed = -readCPUTimer();
     String input = readFileIntoString(arena, path);
-    String output = convertToGTrace(arena, input);
+    String output;
+    switch(outputType) {
+        case OutputType_GTrace: {
+            output = convertToGTrace(arena, input);
+            break;
+        }
+        case OutputType_Spall: {
+            output = convertToSpall(arena, input);
+            break;
+        }
+        default: {
+            assert(false && "Unexpected outputType");
+        }
+    }
 
-    char *outputPath = getOutputPath(arena, path);
-    FILE *f = fopen(outputPath, "w");
+    char *outputPath = getOutputPath(outputType, arena, path);
+    FILE *f = fopen(outputPath, "wb");
     if(!f) {
         fprintf(stderr, "Failed to open file [%s] for writing\n", outputPath);
         return;
     }
 
-    fprintf(f, "%s", output.data);
+    fwrite(output.data, 1, output.size, f);
     fclose(f);
 
     elapsed += readCPUTimer();
@@ -419,7 +611,7 @@ convertFile(Arena *arena, char *path) {
 }
 
 static void
-convertDirectory(Arena *arena, char *path) {
+convertDirectory(OutputType outputType, Arena *arena, char *path) {
     DIR *dir = opendir(path);
     if(dir == NULL) {
         fprintf(stderr, "Failed to open directory = [%s]\n", path);
@@ -432,7 +624,7 @@ convertDirectory(Arena *arena, char *path) {
         String fileName = { .data = (u8 *)entry->d_name, .size = strlen(entry->d_name) };
         if(stringEndsWith(fileName, extension)) {
             u64 pos = arenaPos(arena);
-            convertFile(arena, entry->d_name);
+            convertFile(outputType, arena, entry->d_name);
             arenaPopTo(arena, pos);
         }
     }
@@ -441,6 +633,7 @@ convertDirectory(Arena *arena, char *path) {
 }
 
 int main(int argCount, char **args) {
+    OutputType outputType = OutputType_Spall;
     Arena arena = arenaCreate(64 * MEGABYTE, 4096, 32);
     if(argCount < 2) {
         fprintf(stderr, "Usage: convert file.cpuprofile\n");
@@ -450,10 +643,10 @@ int main(int argCount, char **args) {
     for(int i = 1; i < argCount; i++) {
         stat64_t stat = fileStat(args[i]);
         if(stat.st_mode & S_IFDIR) {
-            convertDirectory(&arena, args[i]);
+            convertDirectory(outputType, &arena, args[i]);
         } else {
             u64 pos = arenaPos(&arena);
-            convertFile(&arena, args[i]);
+            convertFile(outputType, &arena, args[i]);
             arenaPopTo(&arena, pos);
         }
     }
