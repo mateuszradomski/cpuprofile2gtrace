@@ -19,6 +19,7 @@ typedef enum OutputType {
 typedef struct SampleNode {
     String funcName;
     String path;
+    String location;
     int id;
     int childCount;
     int *childs;
@@ -96,6 +97,8 @@ parseSampleNode(Arena *arena, json_t *node) {
 
             json_t *callFrameValues = json_values(value);
             char **callFrameKeys = json_keys(value);
+            int lineNumber = -1;
+            int columnNumber = -1;
             for(size_t j = 0; j < value->len; j++) {
                 char *name = callFrameKeys[j];
                 if(strcmp(name, "functionName") == 0) {
@@ -105,7 +108,15 @@ parseSampleNode(Arena *arena, json_t *node) {
                     }
                 } else if(strcmp(name, "url") == 0) {
                     result.path = (String){ .data = (u8 *)callFrameValues[j].string, .size = callFrameValues[j].len };
+                } else if(strcmp(name, "lineNumber") == 0) {
+                    lineNumber = callFrameValues[j].number;
+                } else if(strcmp(name, "columnNumber") == 0) {
+                    columnNumber = callFrameValues[j].number;
                 }
+            }
+
+            if(lineNumber != -1 && columnNumber != -1) {
+                result.location = pushStringf(arena, "Location: %d:%d", lineNumber, columnNumber);
             }
         }
     }
@@ -431,10 +442,7 @@ writeF64(void *ptr, f64 v) {
 }
 
 static u64
-writeSpallBeginMarker(u8 *output, f64 timestamp, String name, String path) {
-    assert(name.size <= 255);
-    assert(path.size <= 255);
-
+writeSpallBeginMarker(u8 *output, f64 timestamp, String name, String path, String location) {
     u8 *base = output;
     output += writeU8(output, 3);
     output += writeU8(output, 0);
@@ -446,11 +454,16 @@ writeSpallBeginMarker(u8 *output, f64 timestamp, String name, String path) {
     static char buffer[256];
     int written = snprintf(buffer, sizeof(buffer), "%.*s: %.*s", STRFMT(name), STRFMT(path));
 
+    assert(written <= 255);
+
     output += writeU8(output, written);
-    output += writeU8(output, 0);
+    output += writeU8(output, location.size);
 
     memcpy(output, buffer, written);
     output += written;
+
+    memcpy(output, location.data, location.size);
+    output += location.size;
 
     return output - base;
 }
@@ -483,6 +496,7 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
 
     int previousNode = 0;
     bool wasGC = false;
+    String emptyString = LIT_TO_STR("");
     for(int i = 0; i < profile->sampleCount; i++) {
         int nodeId = profile->samples[i]; 
         int delta = profile->deltas[i]; 
@@ -491,7 +505,7 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
         if(isNodeGC) {
             if(!wasGC) {
                 wasGC = true;
-                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, nodes[nodeId].funcName, LIT_TO_STR(""));
+                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, nodes[nodeId].funcName, emptyString, emptyString);
             }
         } else {
             if(wasGC) {
@@ -535,7 +549,7 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
 
             for(s64 i = pushedCount - 1; i >= 0; i--) {
                 SampleNode *n = &nodes[push[i]];
-                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, n->funcName, n->path);
+                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, n->funcName, n->path, n->location);
             }
 
             previousNode = nodeId;
