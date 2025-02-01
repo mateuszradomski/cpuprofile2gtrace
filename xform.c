@@ -458,15 +458,15 @@ writeSpallBeginMarker(u8 *output, f64 timestamp, String fnName, String path, Str
 
     String blockName;
     if(path.size > 0) {
-        static char buffer[256];
+        static char buffer[255];
         blockName.data = (u8 *)buffer;
         blockName.size = snprintf(buffer, sizeof(buffer), "%.*s: %.*s", STRFMT(fnName), STRFMT(path));
     } else {
         blockName = fnName;
+        blockName.size = MIN(255, blockName.size);
     }
 
     assert(blockName.size <= 255);
-
     output += writeU8(output, blockName.size);
     output += writeU8(output, location.size);
 
