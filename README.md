@@ -5,6 +5,7 @@ You can use this two ways:
 - use [this website](https://convert.matradomski.com/), it's the wasm version of this repo
 - clone, compile the `xform.c` file like `clang -O2 xform.c -o xform` and use like `./xform <cpuprofile files to convert>` or `./xform <directory with .cpuprofile files>`
 - You can pass `-d` as an argument in the CLI to remove converted `.cpuprofile` files.
+- By default it generates Spall binary format, pass `-gtrace` to switch to the GTrace format.
 
 Running it generates a file at the same path with the extension replaced by either
 

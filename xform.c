@@ -721,6 +721,10 @@ s32 main(s32 argCount, char **args) {
         String arg = { .data = (u8 *)args[i], .size = strlen(args[i]) };
         if(stringMatch(arg, LIT_TO_STR("-d"))) {
             deleteInputFiles = true;
+        } else if(stringMatch(arg, LIT_TO_STR("-gtrace"))){
+            outputType = OutputType_GTrace;
+        } else if(stringMatch(arg, LIT_TO_STR("-spall"))){
+            outputType = OutputType_Spall;
         } else {
             stat64_t stat = fileStat(args[i]);
             if(stat.st_mode & S_IFDIR) {
