@@ -20,26 +20,26 @@ typedef struct SampleNode {
     String funcName;
     String path;
     String location;
-    int id;
-    int childCount;
-    int *childs;
+    s32 id;
+    s32 childCount;
+    s32 *childs;
 } SampleNode;
 
 typedef struct NodeParents {
-    int *array, length;
+    s32 *array, length;
 } NodeParents;
 
 typedef NodeParents NodeDepths;
 
 typedef struct EvalStackEntry {
-    int sampleNodeId;
-    int duration;
-    int startTime;
+    s32 sampleNodeId;
+    s32 duration;
+    s32 startTime;
 } EvalStackEntry;
 
 typedef struct EmitedEvalStackEntries {
     EvalStackEntry entries[8192];
-    int count;
+    s32 count;
     struct EmitedEvalStackEntries *next;
 } EmitedEvalStackEntries;
 
@@ -52,18 +52,18 @@ typedef struct EmitedEvalStackList {
 
 typedef struct EvalStack {
     EvalStackEntry stack[STACK_SIZE];
-    int length;
+    s32 length;
 
-    int currentTime;
+    s32 currentTime;
     EmitedEvalStackList emitted;
 } EvalStack;
 
 static void
-readJsonNumberArray(json_t *jArray, int *output) {
+readJsonNumberArray(json_t *jArray, s32 *output) {
     json_t *values = json_values(jArray);
 
-    int isArray = 1;
-    for(size_t i = 0; i < jArray->len; i++) {
+    s32 isArray = 1;
+    for(u64 i = 0; i < jArray->len; i++) {
         json_t *value = values + i;
         isArray &= value->type == JSON_NUMBER;
         output[i] = value->number;
@@ -77,7 +77,7 @@ parseSampleNode(Arena *arena, json_t *node) {
 
     json_t *values = json_values(node);
     char **keys = json_keys(node);
-    for(size_t i = 0; i < node->len; i++) {
+    for(u64 i = 0; i < node->len; i++) {
         char *name = keys[i];
         json_t *value = values + i;
 
@@ -88,7 +88,7 @@ parseSampleNode(Arena *arena, json_t *node) {
             assert(value->type == JSON_ARRAY);
             result.childCount = value->len;
             if(result.childCount > 0) {
-                result.childs = arrayPush(arena, int, result.childCount);
+                result.childs = arrayPush(arena, s32, result.childCount);
                 readJsonNumberArray(value, result.childs);
             }
         } else if(strcmp(name, "callFrame") == 0) {
@@ -97,9 +97,9 @@ parseSampleNode(Arena *arena, json_t *node) {
 
             json_t *callFrameValues = json_values(value);
             char **callFrameKeys = json_keys(value);
-            int lineNumber = -1;
-            int columnNumber = -1;
-            for(size_t j = 0; j < value->len; j++) {
+            s32 lineNumber = -1;
+            s32 columnNumber = -1;
+            for(u64 j = 0; j < value->len; j++) {
                 char *name = callFrameKeys[j];
                 if(strcmp(name, "functionName") == 0) {
                     result.funcName = (String){ .data = (u8 *)callFrameValues[j].string, .size = callFrameValues[j].len };
@@ -137,7 +137,7 @@ static void
 parseSampleNodes(Arena *arena, json_t *jArray, SampleNode *output) {
     json_t *values = json_values(jArray);
 
-    for(size_t i = 0; i < jArray->len; i++) {
+    for(u64 i = 0; i < jArray->len; i++) {
         json_t *value = values + i;
         assert(value->type == JSON_OBJECT);
         SampleNode out = parseSampleNode(arena, value);
@@ -168,14 +168,14 @@ emitEntry(EvalStack *stack, EvalStackEntry *entry) {
 }
 
 static void
-evalStackTrace(EvalStack *stack, SampleNode *nodes, NodeParents *parents, int nodeId, int timeDelta) {
+evalStackTrace(EvalStack *stack, SampleNode *nodes, NodeParents *parents, s32 nodeId, s32 timeDelta) {
     if(nodeId == 0) { return; }
 
-    static int unwoundStack[STACK_SIZE] = { 0 };
-    int stackDepth = 0;
+    static s32 unwoundStack[STACK_SIZE] = { 0 };
+    s32 stackDepth = 0;
     if(stringMatch(nodes[nodeId].funcName, LIT_TO_STR("(garbage collector)"))) {
         unwoundStack[0] = nodeId;
-        for(int i = 0; i < stack->length; i++) {
+        for(s32 i = 0; i < stack->length; i++) {
             unwoundStack[i+1] = stack->stack[stack->length - i - 1].sampleNodeId;
         }
         stackDepth = stack->length + 1;
@@ -185,14 +185,14 @@ evalStackTrace(EvalStack *stack, SampleNode *nodes, NodeParents *parents, int no
         }
     }
 
-    for(int i = stackDepth; i < stack->length; i++) {
+    for(s32 i = stackDepth; i < stack->length; i++) {
         emitEntry(stack, stack->stack + i);
         memset(stack->stack + i, 0, sizeof(stack->stack[0]));
     }
 
     stack->length = stackDepth;
 
-    for(int i = 0; i < stackDepth; i++) {
+    for(s32 i = 0; i < stackDepth; i++) {
         nodeId = unwoundStack[stackDepth - i - 1];
         assert(i < ARRAY_LENGTH(stack->stack));
         EvalStackEntry *entry = stack->stack + i;
@@ -213,11 +213,11 @@ evalStackTrace(EvalStack *stack, SampleNode *nodes, NodeParents *parents, int no
 
 typedef struct CPUProfile {
     float startTime;
-    int sampleCount;
-    int *samples;
-    int deltaCount;
-    int *deltas;
-    int sampleNodeCount;
+    s32 sampleCount;
+    s32 *samples;
+    s32 deltaCount;
+    s32 *deltas;
+    s32 sampleNodeCount;
     SampleNode *sampleNodes;
     NodeParents parents;
     NodeDepths depths;
@@ -226,7 +226,7 @@ typedef struct CPUProfile {
 static void
 computeDepth(NodeDepths *depths, SampleNode *nodes, u32 nodeId, u32 depth) {
     SampleNode *n = nodes + nodeId;
-    for(int j = 0; j < n->childCount; j++) {
+    for(s32 j = 0; j < n->childCount; j++) {
         u32 childId = n->childs[j] - 1;
         assert(depths->array[childId] == 0);
         depths->array[childId] = depth + 1;
@@ -244,10 +244,10 @@ parseCPUProfileJSON(Arena *arena, String jsonString) {
     };
 
     json_t *json = 0x0;
-    unsigned int tokens_capacity = 1 + jsonString.size / 2;
+    u32 tokens_capacity = 1 + jsonString.size / 2;
     json_token_t *tokens = arrayPush(arena, json_token_t, tokens_capacity);
-    unsigned int size_req;
-    int tokens_len = json_tokenize((char *)jsonString.data, jsonString.size, tokens, tokens_capacity, &size_req);
+    u32 size_req;
+    s32 tokens_len = json_tokenize((char *)jsonString.data, jsonString.size, tokens, tokens_capacity, &size_req);
     if (tokens_len > 0) {
         json = arenaPush(arena, size_req);
         json_parse_tokens((char *)jsonString.data, tokens, tokens_len, json);
@@ -256,7 +256,7 @@ parseCPUProfileJSON(Arena *arena, String jsonString) {
     assert(json->type == JSON_OBJECT);
     json_t *values = json_values(json);
     char **keys = json_keys(json);
-    for(size_t i = 0; i < json->len; i++) {
+    for(u64 i = 0; i < json->len; i++) {
         char *name = keys[i];
         json_t *value = values + i;
 
@@ -266,16 +266,16 @@ parseCPUProfileJSON(Arena *arena, String jsonString) {
         } else if(strcmp(name, "samples") == 0) {
             assert(value->type == JSON_ARRAY);
             cpuprofile.sampleCount = value->len;
-            cpuprofile.samples = arrayPush(arena, int, cpuprofile.sampleCount);
+            cpuprofile.samples = arrayPush(arena, s32, cpuprofile.sampleCount);
 
             readJsonNumberArray(value, cpuprofile.samples);
-            for(int i = 0 ; i < cpuprofile.sampleCount; i++) {
+            for(s32 i = 0 ; i < cpuprofile.sampleCount; i++) {
                 cpuprofile.samples[i] -= 1;
             }
         } else if(strcmp(name, "timeDeltas") == 0) {
             assert(value->type == JSON_ARRAY);
             cpuprofile.deltaCount = value->len;
-            cpuprofile.deltas = arrayPush(arena, int, cpuprofile.sampleCount);
+            cpuprofile.deltas = arrayPush(arena, s32, cpuprofile.sampleCount);
 
             readJsonNumberArray(value, cpuprofile.deltas);
         } else if(strcmp(name, "nodes") == 0) {
@@ -290,18 +290,18 @@ parseCPUProfileJSON(Arena *arena, String jsonString) {
     assert(cpuprofile.deltaCount == cpuprofile.sampleCount);
 
     cpuprofile.parents.length = cpuprofile.sampleNodeCount;
-    cpuprofile.parents.array = (int *)calloc(1, sizeof(cpuprofile.parents.array[0]) * cpuprofile.parents.length);
+    cpuprofile.parents.array = (s32 *)calloc(1, sizeof(cpuprofile.parents.array[0]) * cpuprofile.parents.length);
 
-    for(int i = 0; i < cpuprofile.parents.length; i++) {
+    for(s32 i = 0; i < cpuprofile.parents.length; i++) {
         SampleNode *node = cpuprofile.sampleNodes + i;
-        for(int j = 0; j < node->childCount; j++) {
+        for(s32 j = 0; j < node->childCount; j++) {
             assert(cpuprofile.parents.array[node->childs[j] - 1] == 0);
             cpuprofile.parents.array[node->childs[j] - 1] = i;
         }
     }
 
     cpuprofile.depths.length = cpuprofile.sampleNodeCount;
-    cpuprofile.depths.array = (int *)calloc(1, sizeof(cpuprofile.depths.array[0]) * cpuprofile.depths.length);
+    cpuprofile.depths.array = (s32 *)calloc(1, sizeof(cpuprofile.depths.array[0]) * cpuprofile.depths.length);
     computeDepth(&cpuprofile.depths, cpuprofile.sampleNodes, 0, 0);
 
     return cpuprofile;
@@ -311,7 +311,7 @@ static EvalStack
 unpackStack(CPUProfile *profile) {
     EvalStack stack = { 0 };
 
-    for(int i = 0; i < profile->sampleCount; i++) {
+    for(s32 i = 0; i < profile->sampleCount; i++) {
         evalStackTrace(&stack, profile->sampleNodes, &profile->parents, profile->samples[i], profile->deltas[i]);
         stack.currentTime += profile->deltas[i];
     }
@@ -321,9 +321,9 @@ unpackStack(CPUProfile *profile) {
 
 static char *
 getOutputPath(OutputType outputType, Arena *arena, char *inputPath) {
-    int inputPathLength = strlen(inputPath);
+    s32 inputPathLength = strlen(inputPath);
 
-    for(int i = inputPathLength - 1; i >= 0; i--) {
+    for(s32 i = inputPathLength - 1; i >= 0; i--) {
         if(inputPath[i] == '.') {
             inputPathLength = i;
             break;
@@ -351,24 +351,24 @@ getOutputPath(OutputType outputType, Arena *arena, char *inputPath) {
     return outputPath;
 }
 
-static int
-writeNumber(char *output, int value) {
-    int written = 0;
+static s32
+writeNumber(char *output, s32 value) {
+    s32 written = 0;
     if (value < 0) {
         output[written++] = '-';
         value = -value;
     }
 
     // Calculate the length of the number
-    int temp = value;
-    int len = 0;
+    s32 temp = value;
+    s32 len = 0;
     do {
         len++;
         temp /= 10;
     } while (temp > 0);
 
     // Write the number to the output buffer
-    for (int i = len - 1; i >= 0; i--) {
+    for (s32 i = len - 1; i >= 0; i--) {
         output[written + i] = (value % 10) + '0';
         value /= 10;
     }
@@ -379,19 +379,19 @@ writeNumber(char *output, int value) {
 
 static String
 writeGTraceOutput(Arena *arena, EvalStack *stack, CPUProfile cpuprofile) {
-    int entries = 0;
-    int funcNameLengths = 0;
+    s32 entries = 0;
+    s32 funcNameLengths = 0;
     for(EmitedEvalStackEntries *node = stack->emitted.head; node; node = node->next) {
         entries += node->count;
-        for(int i = 0; i < node->count; i++) {
+        for(s32 i = 0; i < node->count; i++) {
             EvalStackEntry *e = node->entries + i;
             funcNameLengths += cpuprofile.sampleNodes[e->sampleNodeId].funcName.size;
         }
     }
 
-    int OVERHEAD_SIZE = 512;
-    int LINE_MAX_SIZE = 96;
-    int outputSize = entries * LINE_MAX_SIZE + OVERHEAD_SIZE + funcNameLengths;
+    s32 OVERHEAD_SIZE = 512;
+    s32 LINE_MAX_SIZE = 96;
+    s32 outputSize = entries * LINE_MAX_SIZE + OVERHEAD_SIZE + funcNameLengths;
 
     char *output = arrayPush(arena, char, outputSize);
     char *outputPtr = output;
@@ -399,7 +399,7 @@ writeGTraceOutput(Arena *arena, EvalStack *stack, CPUProfile cpuprofile) {
     outputPtr += 19;
 
     for(EmitedEvalStackEntries *node = stack->emitted.head; node; node = node->next) {
-        for(int i = 0; i < node->count; i++) {
+        for(s32 i = 0; i < node->count; i++) {
             EvalStackEntry *e = node->entries + i;
             // This is for speeeeed
             memcpy(outputPtr, "{\"dur\":", 7);
@@ -458,7 +458,7 @@ writeSpallBeginMarker(u8 *output, f64 timestamp, String name, String path, Strin
     output += writeF64(output, timestamp);
 
     static char buffer[256];
-    int written = snprintf(buffer, sizeof(buffer), "%.*s: %.*s", STRFMT(name), STRFMT(path));
+    s32 written = snprintf(buffer, sizeof(buffer), "%.*s: %.*s", STRFMT(name), STRFMT(path));
 
     assert(written <= 255);
 
@@ -486,7 +486,7 @@ writeSpallEndMarker(u8 *output, f64 timestamp) {
 
 static String
 writeSpallOutput(Arena *arena, CPUProfile *profile) {
-    int outputSize = 10 * MEGABYTE;
+    s32 outputSize = 10 * MEGABYTE;
     u8 *output = arrayPush(arena, u8, outputSize);
     u8 *outputPtr = output;
 
@@ -495,17 +495,17 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
     outputPtr += writeF64(outputPtr, 1);
     outputPtr += writeU64(outputPtr, 0);
 
-    int currentTime = 0;
+    s32 currentTime = 0;
 
     NodeParents *parents = &profile->parents;
     SampleNode *nodes = profile->sampleNodes;
 
-    int previousNode = 0;
+    s32 previousNode = 0;
     bool wasGC = false;
     String emptyString = LIT_TO_STR("");
-    for(int i = 0; i < profile->sampleCount; i++) {
-        int nodeId = profile->samples[i]; 
-        int delta = profile->deltas[i]; 
+    for(s32 i = 0; i < profile->sampleCount; i++) {
+        s32 nodeId = profile->samples[i]; 
+        s32 delta = profile->deltas[i]; 
 
         bool isNodeGC = stringMatch(nodes[nodeId].funcName, LIT_TO_STR("(garbage collector)"));
         if(isNodeGC) {
@@ -520,12 +520,12 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
             }
 
             // Find the common node
-            int previousNodeDepth = profile->depths.array[previousNode];
-            int currentNodeDepth = profile->depths.array[nodeId];
-            int shallowest = MIN(previousNodeDepth, currentNodeDepth);
+            s32 previousNodeDepth = profile->depths.array[previousNode];
+            s32 currentNodeDepth = profile->depths.array[nodeId];
+            s32 shallowest = MIN(previousNodeDepth, currentNodeDepth);
 
-            int previousNodeWalking = previousNode;
-            int currentNodeWalking = nodeId;
+            s32 previousNodeWalking = previousNode;
+            s32 currentNodeWalking = nodeId;
             for(s64 i = 0; i < previousNodeDepth - shallowest; i++) {
                 previousNodeWalking = parents->array[previousNodeWalking];
             }
@@ -538,15 +538,15 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
                 currentNodeWalking = parents->array[currentNodeWalking];
             }
 
-            int commonNode = currentNodeWalking;
-            int walkingNode = previousNode;
+            s32 commonNode = currentNodeWalking;
+            s32 walkingNode = previousNode;
             while(walkingNode != commonNode) {
                 outputPtr += writeSpallEndMarker(outputPtr, currentTime);
                 walkingNode = parents->array[walkingNode];
             }
 
-            static int push[STACK_SIZE] = { 0 };
-            int pushedCount = 0;
+            static s32 push[STACK_SIZE] = { 0 };
+            s32 pushedCount = 0;
             walkingNode = nodeId;
             while(walkingNode != commonNode) {
                 push[pushedCount++] = walkingNode;
@@ -584,7 +584,7 @@ convertToSpall(Arena *arena, String input) {
 #ifdef EMSCRIPTEN
 String result = { 0 };
 
-String *convertStringToGTrace(const char *string, int len) {
+String *convertStringToGTrace(const char *string, s32 len) {
     Arena arena = arenaCreate(64 * MEGABYTE, 4096, 32);
     String input = { (u8 *)string, len };
     result = convertToGTrace(&arena, input);
@@ -654,7 +654,7 @@ convertDirectory(OutputType outputType, Arena *arena, char *path) {
     closedir(dir);
 }
 
-int main(int argCount, char **args) {
+s32 main(s32 argCount, char **args) {
     OutputType outputType = OutputType_Spall;
     Arena arena = arenaCreate(64 * MEGABYTE, 4096, 32);
     if(argCount < 2) {
@@ -662,7 +662,7 @@ int main(int argCount, char **args) {
         return 1;
     }
 
-    for(int i = 1; i < argCount; i++) {
+    for(s32 i = 1; i < argCount; i++) {
         stat64_t stat = fileStat(args[i]);
         if(stat.st_mode & S_IFDIR) {
             convertDirectory(outputType, &arena, args[i]);
