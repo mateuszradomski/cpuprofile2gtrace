@@ -254,7 +254,7 @@ fileStat(const char *path) {
 
 static FileHandle
 openFile(const char *filepath) {
-    return open(filepath, O_RDWR | O_CREAT);
+    return open(filepath, O_RDWR | O_CREAT, 0644);
 }
 
 static void

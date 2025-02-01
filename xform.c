@@ -9,6 +9,14 @@
 #define PL_JSON_IMPLEMENTATION
 #include "pl_json.h"
 
+#if defined(__GNUC__) || defined(__clang__)
+#define ALWAYS_INLINE inline __attribute__((always_inline))
+#elif defined(_MSC_VER)
+#define ALWAYS_INLINE __forceinline
+#else
+#define ALWAYS_INLINE inline
+#endif
+
 typedef enum OutputType {
     OutputType_None,
     OutputType_GTrace,
@@ -350,11 +358,90 @@ getOutputPath(OutputType outputType, Arena *arena, char *inputPath) {
     return outputPath;
 }
 
+typedef enum WriterType {
+    WriterType_File,
+} WriterType;
+
+typedef struct FileWriter {
+    FileHandle f;
+    u8 buffer[128 * KILOBYTE];
+    u32 position;
+} FileWriter;
+
+typedef struct Writer {
+    WriterType type;
+    union {
+        FileWriter fw;
+    } impl;
+} Writer;
+
+static Writer
+writerFromFile(int f) {
+    return (Writer) {
+        .type = WriterType_File,
+        .impl.fw = { .f = f },
+    };
+}
+
+ALWAYS_INLINE static u64
+fileWriterWriteAll(FileWriter *fw, void *data, u64 size) {
+    u64 left = ARRAY_LENGTH(fw->buffer) - fw->position;
+    if(left > size) {
+        memcpy(&fw->buffer[fw->position], data, size);
+        fw->position += size;
+    } else {
+        if(fw->position > 0) {
+            writeFile(fw->f, fw->buffer, fw->position);
+            fw->position = 0;
+        }
+
+        writeFile(fw->f, data, size);
+    }
+    return size;
+}
+
+ALWAYS_INLINE static u64
+writerWriteAll(Writer *w, void *data, u64 size) {
+    switch (w->type) {
+        case WriterType_File:
+            return fileWriterWriteAll(&w->impl.fw, data, size);
+        default:
+            return -1; /* Unknown implementation */
+    }
+}
+
+ALWAYS_INLINE static u64
+writerWriteString(Writer *w, String string) {
+    return writerWriteAll(w, string.data, string.size);
+}
+
+static u64
+writerWriteU8(Writer *w, u8 v) {
+    return writerWriteAll(w, &v, sizeof(v));
+}
+
+static u64
+writerWriteU32(Writer *w, u32 v) {
+    return writerWriteAll(w, &v, sizeof(v));
+}
+
+static u64
+writerWriteU64(Writer *w, u64 v) {
+    return writerWriteAll(w, &v, sizeof(v));
+}
+
+static u64
+writerWriteF64(Writer *w, f64 v) {
+    return writerWriteAll(w, &v, sizeof(v));
+}
+
 static s32
-writeNumber(char *output, s32 value) {
-    s32 written = 0;
+writeNumber(Writer *w, s32 value) {
+    u8 written = 0;
+    u8 buffer[16] = { 0 };
+
     if (value < 0) {
-        output[written++] = '-';
+        buffer[written++] = '-';
         value = -value;
     }
 
@@ -368,16 +455,16 @@ writeNumber(char *output, s32 value) {
 
     // Write the number to the output buffer
     for (s32 i = len - 1; i >= 0; i--) {
-        output[written + i] = (value % 10) + '0';
+        buffer[written + i] = (value % 10) + '0';
         value /= 10;
     }
     written += len;
 
-    return written;
+    return writerWriteAll(w, buffer, written);
 }
 
-static String
-writeGTraceOutput(Arena *arena, EvalStack *stack, CPUProfile cpuprofile) {
+static void
+writeGTraceOutput(EvalStack *stack, CPUProfile cpuprofile, Writer *w) {
     s32 entries = 0;
     s32 funcNameLengths = 0;
     for(EmitedEvalStackEntries *node = stack->emitted.head; node; node = node->next) {
@@ -392,69 +479,38 @@ writeGTraceOutput(Arena *arena, EvalStack *stack, CPUProfile cpuprofile) {
     s32 LINE_MAX_SIZE = 96;
     s32 outputSize = entries * LINE_MAX_SIZE + OVERHEAD_SIZE + funcNameLengths;
 
-    char *output = arrayPush(arena, char, outputSize);
-    char *outputPtr = output;
-    memcpy(outputPtr, "{ \"traceEvents\": [\n", 19);
-    outputPtr += 19;
+    writerWriteString(w, LIT_TO_STR("{ \"traceEvents\": [\n"));
 
+    bool firstEntry = true;
     for(EmitedEvalStackEntries *node = stack->emitted.head; node; node = node->next) {
         for(u32 i = 0; i < node->count; i++) {
             EvalStackEntry *e = node->entries + i;
-            // This is for speeeeed
-            memcpy(outputPtr, "{\"dur\":", 7);
-            outputPtr += 7;
-            outputPtr += writeNumber(outputPtr, e->duration);
-            memcpy(outputPtr, ",\"name\":\"", 9);
-            outputPtr += 9;
-            memcpy(outputPtr, cpuprofile.sampleNodes[e->sampleNodeId].funcName.data, cpuprofile.sampleNodes[e->sampleNodeId].funcName.size);
-            outputPtr += cpuprofile.sampleNodes[e->sampleNodeId].funcName.size;
-            memcpy(outputPtr, "\",\"ph\":\"X\",\"tid\":1,\"ts\":", 24);
-            outputPtr += 24;
-            outputPtr += writeNumber(outputPtr, e->startTime);
-            memcpy(outputPtr, "},\n", 3);
-            outputPtr += 3;
+
+            if(firstEntry) {
+                writerWriteString(w, LIT_TO_STR("{\"dur\":"));
+            } else {
+                writerWriteString(w, LIT_TO_STR(",\n{\"dur\":"));
+            }
+            writeNumber(w, e->duration);
+            writerWriteString(w, LIT_TO_STR(",\"name\":\""));
+            writerWriteString(w, cpuprofile.sampleNodes[e->sampleNodeId].funcName);
+            writerWriteString(w, LIT_TO_STR("\",\"ph\":\"X\",\"tid\":1,\"ts\":"));
+            writeNumber(w, e->startTime);
+            writerWriteString(w, LIT_TO_STR("}"));
         }
     }
 
-    memcpy(outputPtr - 2, "\n]}\n", 4);
-    outputPtr += 4;
-
-    return (String) { (u8 *)output, outputPtr - output };
+    writerWriteString(w, LIT_TO_STR("\n]}\n"));
 }
 
-static u64
-writeU8(void *ptr, u8 v) {
-    ((u8 *)ptr)[0] = v;
-    return sizeof(u8);
-}
+static void
+writeSpallBeginMarker(Writer *w, f64 timestamp, String fnName, String path, String location) {
+    writerWriteU8(w, 3);
+    writerWriteU8(w, 0);
 
-static u64
-writeU32(void *ptr, u32 v) {
-    ((u32 *)ptr)[0] = v;
-    return sizeof(u32);
-}
-
-static u64
-writeU64(void *ptr, u64 v) {
-    ((u64 *)ptr)[0] = v;
-    return sizeof(u64);
-}
-
-static u64
-writeF64(void *ptr, f64 v) {
-    ((f64 *)ptr)[0] = v;
-    return sizeof(f64);
-}
-
-static u64
-writeSpallBeginMarker(u8 *output, f64 timestamp, String fnName, String path, String location) {
-    u8 *base = output;
-    output += writeU8(output, 3);
-    output += writeU8(output, 0);
-
-    output += writeU32(output, 1);
-    output += writeU32(output, 1);
-    output += writeF64(output, timestamp);
+    writerWriteU32(w, 1);
+    writerWriteU32(w, 1);
+    writerWriteF64(w, timestamp);
 
     String blockName;
     if(path.size > 0) {
@@ -467,38 +523,27 @@ writeSpallBeginMarker(u8 *output, f64 timestamp, String fnName, String path, Str
     }
 
     assert(blockName.size <= 255);
-    output += writeU8(output, blockName.size);
-    output += writeU8(output, location.size);
+    writerWriteU8(w, blockName.size);
+    writerWriteU8(w, location.size);
 
-    memcpy(output, blockName.data, blockName.size);
-    output += blockName.size;
-
-    memcpy(output, location.data, location.size);
-    output += location.size;
-
-    return output - base;
+    writerWriteAll(w, blockName.data, blockName.size);
+    writerWriteAll(w, location.data, location.size);
 }
 
-static u64
-writeSpallEndMarker(u8 *output, f64 timestamp) {
-    u8 *base = output;
-    output += writeU8(output, 4);
-    output += writeU32(output, 1);
-    output += writeU32(output, 1);
-    output += writeF64(output, timestamp);
-    return output - base;
+static void
+writeSpallEndMarker(Writer *w, f64 timestamp) {
+    writerWriteU8(w, 4);
+    writerWriteU32(w, 1);
+    writerWriteU32(w, 1);
+    writerWriteF64(w, timestamp);
 }
 
-static String
-writeSpallOutput(Arena *arena, CPUProfile *profile) {
-    s32 outputSize = 10 * MEGABYTE;
-    u8 *output = arrayPush(arena, u8, outputSize);
-    u8 *outputPtr = output;
-
-    outputPtr += writeU64(outputPtr, 0x0BADF00D);
-    outputPtr += writeU64(outputPtr, 1);
-    outputPtr += writeF64(outputPtr, 1);
-    outputPtr += writeU64(outputPtr, 0);
+static void
+writeSpallOutput(CPUProfile *profile, Writer *w) {
+    writerWriteU64(w, 0x0BADF00D);
+    writerWriteU64(w, 1);
+    writerWriteF64(w, 1);
+    writerWriteU64(w, 0);
 
     s32 currentTime = 0;
 
@@ -515,12 +560,12 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
         if(isNodeGC) {
             if(!wasGC) {
                 wasGC = true;
-                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, nodes[nodeId].funcName, emptyString, emptyString);
+                writeSpallBeginMarker(w, currentTime, nodes[nodeId].funcName, emptyString, emptyString);
             }
         } else {
             if(wasGC) {
                 wasGC = false;
-                outputPtr += writeSpallEndMarker(outputPtr, currentTime);
+                writeSpallEndMarker(w, currentTime);
             }
 
             // Find the common node
@@ -545,7 +590,7 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
             s32 commonNode = currentNodeWalking;
             s32 walkingNode = previousNode;
             while(walkingNode != commonNode) {
-                outputPtr += writeSpallEndMarker(outputPtr, currentTime);
+                writeSpallEndMarker(w, currentTime);
                 walkingNode = parents->array[walkingNode];
             }
 
@@ -559,7 +604,7 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
 
             for(s64 i = pushedCount - 1; i >= 0; i--) {
                 SampleNode *n = &nodes[push[i]];
-                outputPtr += writeSpallBeginMarker(outputPtr, currentTime, n->funcName, n->path, n->location);
+                writeSpallBeginMarker(w, currentTime, n->funcName, n->path, n->location);
             }
 
             previousNode = nodeId;
@@ -567,22 +612,20 @@ writeSpallOutput(Arena *arena, CPUProfile *profile) {
 
         currentTime += profile->deltas[i];
     }
-
-    return (String) { (u8 *)output, outputPtr - output };
 }
 
-static String
-convertToGTrace(Arena *arena, String input) {
+static void
+convertToGTrace(Arena *arena, String input, Writer *w) {
     CPUProfile cpuprofile = parseCPUProfileJSON(arena, input);
     EvalStack stack = unpackStack(&cpuprofile);
 
-    return writeGTraceOutput(arena, &stack, cpuprofile);
+    writeGTraceOutput(&stack, cpuprofile, w);
 }
 
-static String
-convertToSpall(Arena *arena, String input) {
+static void
+convertToSpall(Arena *arena, String input, Writer *w) {
     CPUProfile cpuprofile = parseCPUProfileJSON(arena, input);
-    return writeSpallOutput(arena, &cpuprofile);
+    writeSpallOutput(&cpuprofile, w);
 }
 
 #ifdef EMSCRIPTEN
@@ -605,15 +648,23 @@ bool deleteInputFiles = false;
 static void
 convertFile(OutputType outputType, Arena *arena, char *path) {
     u64 elapsed = -readCPUTimer();
+
+    char *outputPath = getOutputPath(outputType, arena, path);
+    FileHandle f = openFile(outputPath);
+    if(f == -1) {
+        fprintf(stderr, "Failed to open file [%s] for writing\n", outputPath);
+        return;
+    }
+
+    Writer writer = writerFromFile(f);
     String input = readFileIntoString(arena, path);
-    String output;
     switch(outputType) {
         case OutputType_GTrace: {
-            output = convertToGTrace(arena, input);
+            convertToGTrace(arena, input, &writer);
             break;
         }
         case OutputType_Spall: {
-            output = convertToSpall(arena, input);
+            convertToSpall(arena, input, &writer);
             break;
         }
         default: {
@@ -621,15 +672,7 @@ convertFile(OutputType outputType, Arena *arena, char *path) {
         }
     }
 
-    char *outputPath = getOutputPath(outputType, arena, path);
-    FILE *f = fopen(outputPath, "wb");
-    if(!f) {
-        fprintf(stderr, "Failed to open file [%s] for writing\n", outputPath);
-        return;
-    }
-
-    fwrite(output.data, 1, output.size, f);
-    fclose(f);
+    close(f);
 
     elapsed += readCPUTimer();
     u64 elapsedNs = cyclesToNanoSeconds(elapsed, readCPUFrequency());
