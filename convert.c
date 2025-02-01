@@ -250,58 +250,58 @@ parseCPUProfileJSON(Arena *arena, String jsonString) {
     if (tokens_len > 0) {
         json = arenaPush(arena, size_req);
         json_parse_tokens((char *)jsonString.data, tokens, tokens_len, json);
-    }
 
-    assert(json->type == JSON_OBJECT);
-    json_t *values = json_values(json);
-    char **keys = json_keys(json);
-    for(u64 i = 0; i < json->len; i++) {
-        char *name = keys[i];
-        json_t *value = values + i;
+        assert(json->type == JSON_OBJECT);
+        json_t *values = json_values(json);
+        char **keys = json_keys(json);
+        for(u64 i = 0; i < json->len; i++) {
+            char *name = keys[i];
+            json_t *value = values + i;
 
-        if(strcmp(name, "startTime") == 0) {
-            assert(value->type == JSON_NUMBER);
-            cpuprofile.startTime = value->number;
-        } else if(strcmp(name, "samples") == 0) {
-            assert(value->type == JSON_ARRAY);
-            cpuprofile.sampleCount = value->len;
-            cpuprofile.samples = arrayPush(arena, s32, cpuprofile.sampleCount);
+            if(strcmp(name, "startTime") == 0) {
+                assert(value->type == JSON_NUMBER);
+                cpuprofile.startTime = value->number;
+            } else if(strcmp(name, "samples") == 0) {
+                assert(value->type == JSON_ARRAY);
+                cpuprofile.sampleCount = value->len;
+                cpuprofile.samples = arrayPush(arena, s32, cpuprofile.sampleCount);
 
-            readJsonNumberArray(value, cpuprofile.samples);
-            for(s32 i = 0 ; i < cpuprofile.sampleCount; i++) {
-                cpuprofile.samples[i] -= 1;
+                readJsonNumberArray(value, cpuprofile.samples);
+                for(s32 i = 0 ; i < cpuprofile.sampleCount; i++) {
+                    cpuprofile.samples[i] -= 1;
+                }
+            } else if(strcmp(name, "timeDeltas") == 0) {
+                assert(value->type == JSON_ARRAY);
+                cpuprofile.deltaCount = value->len;
+                cpuprofile.deltas = arrayPush(arena, s32, cpuprofile.sampleCount);
+
+                readJsonNumberArray(value, cpuprofile.deltas);
+            } else if(strcmp(name, "nodes") == 0) {
+                assert(value->type == JSON_ARRAY);
+                cpuprofile.sampleNodeCount = value->len;
+                cpuprofile.sampleNodes = arrayPush(arena, SampleNode, cpuprofile.sampleNodeCount);
+
+                parseSampleNodes(arena, value, cpuprofile.sampleNodes);
             }
-        } else if(strcmp(name, "timeDeltas") == 0) {
-            assert(value->type == JSON_ARRAY);
-            cpuprofile.deltaCount = value->len;
-            cpuprofile.deltas = arrayPush(arena, s32, cpuprofile.sampleCount);
-
-            readJsonNumberArray(value, cpuprofile.deltas);
-        } else if(strcmp(name, "nodes") == 0) {
-            assert(value->type == JSON_ARRAY);
-            cpuprofile.sampleNodeCount = value->len;
-            cpuprofile.sampleNodes = arrayPush(arena, SampleNode, cpuprofile.sampleNodeCount);
-
-            parseSampleNodes(arena, value, cpuprofile.sampleNodes);
         }
-    }
 
-    assert(cpuprofile.deltaCount == cpuprofile.sampleCount);
+        assert(cpuprofile.deltaCount == cpuprofile.sampleCount);
 
-    cpuprofile.parents.length = cpuprofile.sampleNodeCount;
-    cpuprofile.parents.array = (s32 *)calloc(1, sizeof(cpuprofile.parents.array[0]) * cpuprofile.parents.length);
+        cpuprofile.parents.length = cpuprofile.sampleNodeCount;
+        cpuprofile.parents.array = (s32 *)calloc(1, sizeof(cpuprofile.parents.array[0]) * cpuprofile.parents.length);
 
-    for(s32 i = 0; i < cpuprofile.parents.length; i++) {
-        SampleNode *node = cpuprofile.sampleNodes + i;
-        for(s32 j = 0; j < node->childCount; j++) {
-            assert(cpuprofile.parents.array[node->childs[j] - 1] == 0);
-            cpuprofile.parents.array[node->childs[j] - 1] = i;
+        for(s32 i = 0; i < cpuprofile.parents.length; i++) {
+            SampleNode *node = cpuprofile.sampleNodes + i;
+            for(s32 j = 0; j < node->childCount; j++) {
+                assert(cpuprofile.parents.array[node->childs[j] - 1] == 0);
+                cpuprofile.parents.array[node->childs[j] - 1] = i;
+            }
         }
-    }
 
-    cpuprofile.depths.length = cpuprofile.sampleNodeCount;
-    cpuprofile.depths.array = (s32 *)calloc(1, sizeof(cpuprofile.depths.array[0]) * cpuprofile.depths.length);
-    computeDepth(&cpuprofile.depths, cpuprofile.sampleNodes, 0, 0);
+        cpuprofile.depths.length = cpuprofile.sampleNodeCount;
+        cpuprofile.depths.array = (s32 *)calloc(1, sizeof(cpuprofile.depths.array[0]) * cpuprofile.depths.length);
+        computeDepth(&cpuprofile.depths, cpuprofile.sampleNodes, 0, 0);
+    }
 
     return cpuprofile;
 }
